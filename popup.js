@@ -80,7 +80,14 @@ document.addEventListener('DOMContentLoaded', () => {
             msgBox.style.display = 'block';
 
             if (sendMessage && typeof chrome !== 'undefined' && chrome.runtime) {
-                chrome.runtime.sendMessage({ type: "START_ENGINE" });
+                chrome.runtime.sendMessage({ type: "START_ENGINE" }, (response) => {
+                    if (response && response.status === "auth_failed") {
+                        // Login gagal — kembalikan ke standby
+                        statusText.innerText = 'LOGIN GAGAL!';
+                        statusText.style.color = '#ef4444';
+                        setTimeout(() => setEngineState(false, false), 2000);
+                    }
+                });
             }
         } else {
             // MODE OFF (Berhenti)

@@ -175,30 +175,38 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     if (message.type === "START_ENGINE") {
-        projectState.isActive = true;
-        projectState.docsCreated = 0;
-        projectState.storiesInCurrentDoc = 0;
-        projectState.totalStoriesGlobal = 0;
-        projectState.currentDocId = null;
-        projectState.isWriting = false;
+        // Login Google DULU sebelum mulai engine
+        console.log("[Background] Mengecek login Google...");
+        getAuthToken().then((token) => {
+            console.log("[Background] Login Google OK! Token diterima.");
 
-        // FITUR BARU: Auto-Cleanup Zombie Tabs
-        // Tutup semua tab pekerja dari sesi sebelumnya sebelum mulai yang baru
-        Object.keys(projectState.tabs).forEach(id => {
-            chrome.tabs.remove(parseInt(id)).catch(() => {});
-        });
-        projectState.tabs = {}; 
-        
-        console.log("[Background] ENGINE START! Membuka 3 Tab Fresh...");
-        for(let i = 0; i < 3; i++) {
-            chrome.tabs.create({ url: projectState.gptUrl || "https://chatgpt.com/", active: false }, (newTab) => {
-                projectState.tabs[newTab.id] = { phase: "IDLE", wordCount: 0, storyNumber: 0, currentIdea: "", storyBuffer: "" };
-                saveStateToDisk();
+            projectState.isActive = true;
+            projectState.docsCreated = 0;
+            projectState.storiesInCurrentDoc = 0;
+            projectState.totalStoriesGlobal = 0;
+            projectState.currentDocId = null;
+            projectState.isWriting = false;
+
+            // Auto-Cleanup Zombie Tabs
+            Object.keys(projectState.tabs).forEach(id => {
+                chrome.tabs.remove(parseInt(id)).catch(() => {});
             });
-        }
-        saveStateToDisk();
-        sendResponse({ status: "started" });
-        return true;
+            projectState.tabs = {};
+
+            console.log("[Background] ENGINE START! Membuka 3 Tab Fresh...");
+            for(let i = 0; i < 3; i++) {
+                chrome.tabs.create({ url: projectState.gptUrl || "https://chatgpt.com/", active: false }, (newTab) => {
+                    projectState.tabs[newTab.id] = { phase: "IDLE", wordCount: 0, storyNumber: 0, currentIdea: "", storyBuffer: "" };
+                    saveStateToDisk();
+                });
+            }
+            saveStateToDisk();
+            sendResponse({ status: "started" });
+        }).catch((err) => {
+            console.error("[Background] Login Google GAGAL:", err);
+            sendResponse({ status: "auth_failed", error: String(err) });
+        });
+        return true; // Async sendResponse
     }
 
     if (message.type === "STOP_ENGINE") {
