@@ -11,17 +11,29 @@ function initWhenReady(retryCount = 0) {
         try {
             chrome.runtime.sendMessage({ type: "TAB_READY" }, (response) => {
                 if (chrome.runtime.lastError) {
-                    console.warn("[Content Script] Menunggu inisialisasi Background... Retry ke-" + (retryCount + 1));
-                    // Retry koneksi ke background (max 15x dengan interval naik)
+                    console.warn("[Content Script] Background belum siap. Retry ke-" + (retryCount + 1));
                     if (retryCount < 15) {
                         setTimeout(() => initWhenReady(retryCount + 1), 2000 + (retryCount * 500));
                     } else {
-                        console.error("[Content Script] Gagal konek ke Background setelah 15x retry. Buka ulang tab atau reload extension.");
+                        console.error("[Content Script] Gagal konek ke Background setelah 15x retry.");
                     }
                     return;
                 }
-                if (response && response.status === "ok") {
-                    console.log("[Content Script] Tab terdaftar di Background. Menunggu perintah...");
+
+                if (response && response.action === "INJECT") {
+                    // Background langsung kirim perintah INJECT via response
+                    console.log("[Content Script] Perintah INJECT diterima langsung! Memulai fase:", response.phase);
+                    engineActive = true;
+                    setTimeout(() => injectTextAndSend(response.text), 1500);
+                } else if (response && response.status === "standby") {
+                    // Engine belum aktif, retry berkala
+                    console.log("[Content Script] Engine belum aktif (standby). Retry dalam 3 detik...");
+                    if (retryCount < 30) {
+                        setTimeout(() => initWhenReady(retryCount + 1), 3000);
+                    }
+                } else if (response && response.status === "ok") {
+                    // Tab sudah terdaftar tapi bukan fase IDLE (mungkin sudah berjalan)
+                    console.log("[Content Script] Tab terdaftar. Menunggu perintah dari Background...");
                 }
             });
         } catch (error) {

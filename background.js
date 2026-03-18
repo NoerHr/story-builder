@@ -178,14 +178,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return true;
         }
 
-        sendResponse({ status: "ok" });
-
         if (projectState.tabs[tabId].phase === "IDLE") {
             projectState.tabs[tabId].phase = "BRAINSTORM";
             const promptIde = "Berikan 10 ide tema cerita monolog personal (sudut pandang 'Aku') yang sangat liar, emosional, unik, dan tidak klise. Format jawabanmu HANYA berupa teks list biasa, satu baris untuk satu ide. Jangan berikan nomor urut, kalimat pembuka, atau penutup. Berikan idenya saja.";
-            setTimeout(() => {
-                chrome.tabs.sendMessage(tabId, { action: "INJECT", text: promptIde, phase: "BRAINSTORM" });
-            }, 500);
+            // Kirim INJECT langsung via sendResponse agar tidak hilang
+            sendResponse({ status: "ok", action: "INJECT", text: promptIde, phase: "BRAINSTORM" });
+        } else {
+            sendResponse({ status: "ok" });
         }
         return true;
     }
