@@ -3,29 +3,36 @@ let isStopping = false;
 let monitorInterval = null;
 
 // SISTEM BARU: Menunggu UI ChatGPT benar-benar siap
-function initWhenReady() {
+function initWhenReady(retryCount = 0) {
     const textarea = document.querySelector('div.ProseMirror#prompt-textarea[contenteditable="true"]') || document.querySelector('#prompt-textarea');
-    
+
     if (textarea && textarea.style.display !== 'none') {
         console.log("[Content Script] Kotak teks ProseMirror ChatGPT ditemukan! Melapor ke Background...");
         try {
             chrome.runtime.sendMessage({ type: "TAB_READY" }, (response) => {
                 if (chrome.runtime.lastError) {
-                    console.warn("[Content Script] Menunggu inisialisasi Background...");
+                    console.warn("[Content Script] Menunggu inisialisasi Background... Retry ke-" + (retryCount + 1));
+                    // Retry koneksi ke background (max 15x dengan interval naik)
+                    if (retryCount < 15) {
+                        setTimeout(() => initWhenReady(retryCount + 1), 2000 + (retryCount * 500));
+                    } else {
+                        console.error("[Content Script] Gagal konek ke Background setelah 15x retry. Buka ulang tab atau reload extension.");
+                    }
                     return;
                 }
-                if (response && response.action === "INJECT") {
-                    console.log("[Content Script] Tab Siap. Menjalankan perintah dari Background...");
-                    engineActive = true;
-                    setTimeout(() => injectTextAndSend(response.text), 1500);
+                if (response && response.status === "ok") {
+                    console.log("[Content Script] Tab terdaftar di Background. Menunggu perintah...");
                 }
             });
         } catch (error) {
-            console.warn("[Content Script] Koneksi ke background terputus sementara. Aman.", error);
+            console.warn("[Content Script] Koneksi ke background terputus sementara.", error);
+            if (retryCount < 15) {
+                setTimeout(() => initWhenReady(retryCount + 1), 2000 + (retryCount * 500));
+            }
         }
     } else {
         console.log("[Content Script] Menunggu UI ProseMirror loading...");
-        setTimeout(initWhenReady, 1000); 
+        setTimeout(() => initWhenReady(retryCount), 1000);
     }
 }
 

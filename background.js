@@ -170,16 +170,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return true;
     }
 
-    if (message.type === "TAB_READY" && projectState.isActive) {
+    if (message.type === "TAB_READY") {
         let tabId = sender.tab.id;
-        
-        if (!projectState.tabs[tabId]) return; // Anti-Hijack
-        
+
+        if (!projectState.isActive || !projectState.tabs[tabId]) {
+            sendResponse({ status: "standby" });
+            return true;
+        }
+
+        sendResponse({ status: "ok" });
+
         if (projectState.tabs[tabId].phase === "IDLE") {
             projectState.tabs[tabId].phase = "BRAINSTORM";
             const promptIde = "Berikan 10 ide tema cerita monolog personal (sudut pandang 'Aku') yang sangat liar, emosional, unik, dan tidak klise. Format jawabanmu HANYA berupa teks list biasa, satu baris untuk satu ide. Jangan berikan nomor urut, kalimat pembuka, atau penutup. Berikan idenya saja.";
-            chrome.tabs.sendMessage(tabId, { action: "INJECT", text: promptIde, phase: "BRAINSTORM" });
+            setTimeout(() => {
+                chrome.tabs.sendMessage(tabId, { action: "INJECT", text: promptIde, phase: "BRAINSTORM" });
+            }, 500);
         }
+        return true;
     }
 
     if (message.type === "GPT_DONE" && projectState.isActive) {

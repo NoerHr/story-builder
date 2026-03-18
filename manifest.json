@@ -22,7 +22,7 @@
     "service_worker": "background.js"
   },
   "oauth2": {
-    "client_id": "153662079704-o3a62bea0ean9lfgmp6i444ko3tbmtlg.apps.googleusercontent.comini ",
+    "client_id": "153662079704-o3a62bea0ean9lfgmp6i444ko3tbmtlg.apps.googleusercontent.com",
     "scopes": [
       "https://www.googleapis.com/auth/documents",
       "https://www.googleapis.com/auth/drive.file"
