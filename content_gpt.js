@@ -2,6 +2,18 @@ let engineActive = false;
 let isStopping = false;
 let monitorInterval = null;
 
+// === LOCAL TRACKING untuk self-recovery saat channel closed ===
+let localWordCount = 0;
+let localTargetWords = 15000;
+let lastKnownContext = "";
+
+// Load target dari storage
+if (typeof chrome !== 'undefined' && chrome.storage) {
+    chrome.storage.local.get(['wordLimit'], (result) => {
+        if (result.wordLimit) localTargetWords = parseInt(result.wordLimit) || 15000;
+    });
+}
+
 // SISTEM BARU: Menunggu UI ChatGPT benar-benar siap
 function initWhenReady(retryCount = 0) {
     const textarea = document.querySelector('div.ProseMirror#prompt-textarea[contenteditable="true"]') || document.querySelector('#prompt-textarea');
@@ -60,9 +72,110 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     if (message.action === "INJECT" && !isStopping) {
         engineActive = true;
+        waitingForInject = false; // INJECT diterima, reset timer
         setTimeout(() => injectTextAndSend(message.text), 2000);
     }
 });
+
+// === RETRY MECHANISM: kalau INJECT tidak datang setelah GPT_DONE ===
+let waitingForInject = false;
+let waitingTimer = null;
+
+function waitForNextInject() {
+    waitingForInject = true;
+    if (waitingTimer) clearTimeout(waitingTimer);
+
+    waitingTimer = setTimeout(() => {
+        if (!waitingForInject || !engineActive || isStopping) return;
+
+        console.warn("[Retry] INJECT tidak datang dalam 30 detik! Kirim TAB_READY ulang...");
+        try {
+            chrome.runtime.sendMessage({ type: "TAB_READY" }, (response) => {
+                if (chrome.runtime.lastError) {
+                    console.error("[Retry] Background tidak merespon. Self-recovery...");
+                    selfContinue(lastKnownContext);
+                    return;
+                }
+                if (response && response.action === "INJECT") {
+                    console.log("[Retry] INJECT diterima dari TAB_READY retry!");
+                    waitingForInject = false;
+                    engineActive = true;
+                    setTimeout(() => injectTextAndSend(response.text), 1500);
+                } else {
+                    console.log("[Retry] Background merespon tapi tanpa INJECT. Self-recovery...");
+                    selfContinue(lastKnownContext);
+                }
+            });
+        } catch (e) {
+            console.error("[Retry] Error:", e);
+            selfContinue(lastKnownContext);
+        }
+    }, 30000); // 30 detik tunggu
+}
+
+// === SEND GPT_DONE dengan retry + self-recovery ===
+function sendGptDone(fullText, wordCount, lastParagraph) {
+    localWordCount += wordCount;
+    // Bersihkan lastParagraph dari UI text sebelum kirim & simpan
+    lastParagraph = cleanText(lastParagraph);
+    lastKnownContext = lastParagraph;
+
+    console.log(`[GPT_DONE] Mengirim... (${wordCount} kata chunk | Total lokal: ${localWordCount}/${localTargetWords})`);
+
+    function attemptSend(retries) {
+        try {
+            chrome.runtime.sendMessage({
+                type: "GPT_DONE",
+                fullText: fullText,
+                wordCount: wordCount,
+                lastParagraph: lastParagraph
+            }, (response) => {
+                if (chrome.runtime.lastError) {
+                    console.error(`[GPT_DONE] Channel error: ${chrome.runtime.lastError.message}`);
+                    if (retries > 0) {
+                        console.log(`[GPT_DONE] Retry dalam 5 detik... (${retries} sisa)`);
+                        setTimeout(() => attemptSend(retries - 1), 5000);
+                    } else {
+                        console.warn("[GPT_DONE] Semua retry gagal! Self-recovery...");
+                        selfContinue(lastParagraph);
+                    }
+                    return;
+                }
+                console.log("[GPT_DONE] Berhasil terkirim ke background!");
+                waitForNextInject(); // Tunggu INJECT berikutnya
+            });
+        } catch (e) {
+            console.error("[GPT_DONE] Exception:", e);
+            if (retries > 0) {
+                setTimeout(() => attemptSend(retries - 1), 5000);
+            } else {
+                selfContinue(lastParagraph);
+            }
+        }
+    }
+
+    attemptSend(3); // 3x retry
+}
+
+// === SELF-CONTINUE: Lanjutkan cerita sendiri saat background unreachable ===
+function selfContinue(context) {
+    if (!engineActive || isStopping) return;
+
+    // Bersihkan context dari UI text lalu ambil 5-10 kata terakhir
+    const cleanedContext = cleanText(context || "");
+    const words = cleanedContext.trim().split(/\s+/).filter(w => w.length > 0);
+    const lastWords = words.slice(-10).join(' ');
+
+    let prompt;
+    if (localWordCount < (localTargetWords - 1000)) {
+        prompt = `Lanjutkan narasi monolog personal ini berdasarkan bagian akhir cerita sebelumnya:\n\n"...${lastWords}"\n\nBawa narasi bergerak maju. PENTING: JANGAN memberikan kesimpulan atau penutup. DILARANG KERAS menggunakan percakapan atau dialog.`;
+    } else {
+        prompt = `Lanjutkan narasi monolog personal ini berdasarkan bagian akhir cerita sebelumnya:\n\n"...${lastWords}"\n\nArahkan cerita menuju akhir yang memuaskan. Berikan kesimpulan dan penutup cerita yang emosional. DILARANG KERAS menggunakan percakapan atau dialog.`;
+    }
+
+    console.log(`[Recovery] Self-continue! ${localWordCount}/${localTargetWords} kata | Context: "${lastWords}"`);
+    setTimeout(() => injectTextAndSend(prompt), 3000);
+}
 
 // FUNGSI INJEKSI V7.1 (PASTE-FIRST, TANPA innerHTML)
 function injectTextAndSend(text, retryCount = 0) {
@@ -259,9 +372,7 @@ function mulaiMemonitor() {
                         const wordCount = fullText.trim().split(/\s+/).filter(w => w.length > 0).length;
                         let lastParagraph = fullText.substring(fullText.length - 300).trim().replace(/\n/g, ' ');
                         console.log(`[Monitor] FORCE SELESAI! ${wordCount} kata (${fullText.length} chars).`);
-                        try {
-                            chrome.runtime.sendMessage({ type: "GPT_DONE", fullText, wordCount, lastParagraph });
-                        } catch (e) { console.error("[Monitor] Gagal kirim:", e); }
+                        sendGptDone(fullText, wordCount, lastParagraph);
                         wasTyping = false;
                         lastCapturedText = "";
                     }
@@ -315,16 +426,7 @@ function mulaiMemonitor() {
             console.log(`[Monitor] AI Selesai! ${wordCount} kata (${fullText.length} chars).`);
             console.log(`[Monitor] Preview: "${fullText.substring(0, 150)}..."`);
 
-            try {
-                chrome.runtime.sendMessage({
-                    type: "GPT_DONE",
-                    fullText: fullText,
-                    wordCount: wordCount,
-                    lastParagraph: lastParagraph
-                });
-            } catch (error) {
-                console.error("[Monitor] Gagal kirim GPT_DONE:", error);
-            }
+            sendGptDone(fullText, wordCount, lastParagraph);
 
             wasTyping = false;
             lastCapturedText = "";
@@ -350,9 +452,7 @@ function mulaiMemonitor() {
                 let lastParagraph = fullText.substring(fullText.length - 300).trim().replace(/\n/g, ' ');
 
                 console.log(`[Monitor] AI Selesai! ${wordCount} kata (${fullText.length} chars).`);
-                try {
-                    chrome.runtime.sendMessage({ type: "GPT_DONE", fullText, wordCount, lastParagraph });
-                } catch (e) { console.error("[Monitor] Gagal kirim:", e); }
+                sendGptDone(fullText, wordCount, lastParagraph);
 
                 lastCapturedText = "";
                 return;
@@ -421,6 +521,8 @@ function cleanText(text) {
         "Chat sementara",
         "You said:",
         "ChatGPT said:",
+        "Gen Story bilang:",
+        "Gen Story said:",
     ];
 
     let cleaned = text;

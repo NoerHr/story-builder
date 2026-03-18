@@ -280,6 +280,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                     console.log(`[Background] Tab ${tabId} buffer: ${tabState.wordCount} / ${projectState.targetWords} kata`);
                     saveStateToDisk();
 
+                    // Bersihkan lastParagraph dari UI text ChatGPT
+                    let cleanParagraph = (message.lastParagraph || "").replace(/Gen Story bilang:/g, '').replace(/Gen Story said:/g, '').replace(/ChatGPT said:/g, '').replace(/ChatGPT bilang:/g, '').replace(/\.\s*\./g, '.').trim();
+
                     if (tabState.phase === "FINISHING") {
                         console.log(`[Background] Tab ${tabId} FINISHING! Menyimpan ke Doc...`);
 
@@ -317,10 +320,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
                     if (tabState.wordCount < (projectState.targetWords - 1000)) {
                         nextPhase = "GENERATING";
-                        nextPrompt = `Lanjutkan narasi monolog personal ini berdasarkan bagian akhir cerita sebelumnya:\n\n"...${message.lastParagraph}"\n\nBawa narasi bergerak maju. PENTING: JANGAN memberikan kesimpulan atau penutup. DILARANG KERAS menggunakan percakapan atau dialog.`;
+                        nextPrompt = `Lanjutkan narasi monolog personal ini berdasarkan bagian akhir cerita sebelumnya:\n\n"...${cleanParagraph}"\n\nBawa narasi bergerak maju. PENTING: JANGAN memberikan kesimpulan atau penutup. DILARANG KERAS menggunakan percakapan atau dialog.`;
                     } else {
                         nextPhase = "FINISHING";
-                        nextPrompt = `Lanjutkan narasi monolog personal ini berdasarkan bagian akhir cerita sebelumnya:\n\n"...${message.lastParagraph}"\n\nArahkan cerita menuju akhir yang memuaskan. Berikan kesimpulan dan penutup cerita yang emosional. DILARANG KERAS menggunakan percakapan atau dialog.`;
+                        nextPrompt = `Lanjutkan narasi monolog personal ini berdasarkan bagian akhir cerita sebelumnya:\n\n"...${cleanParagraph}"\n\nArahkan cerita menuju akhir yang memuaskan. Berikan kesimpulan dan penutup cerita yang emosional. DILARANG KERAS menggunakan percakapan atau dialog.`;
                     }
 
                     console.log(`[Background] Tab ${tabId} → ${nextPhase} (${tabState.wordCount}/${projectState.targetWords} kata)`);
