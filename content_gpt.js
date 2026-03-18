@@ -186,117 +186,164 @@ function triggerSend(textarea) {
     }, 3000);
 }
 
+// Track jumlah pesan sebelum kirim, agar tidak proses pesan lama
+let messageCountBeforeSend = 0;
+
 function mulaiMemonitor() {
     if (monitorInterval) clearInterval(monitorInterval);
 
     let errorStuckCounter = 0;
     let monitorTick = 0;
 
-    console.log("[Monitor] Mulai memantau respon ChatGPT...");
+    // Hitung pesan yang sudah ada SEBELUM GPT mulai jawab
+    const existingMessages = document.querySelectorAll('[data-message-author-role="assistant"]');
+    messageCountBeforeSend = existingMessages.length;
+    // Tandai semua pesan lama agar tidak terproses
+    existingMessages.forEach(el => el.setAttribute('data-processed', 'true'));
+
+    console.log(`[Monitor] Mulai memantau. Pesan existing: ${messageCountBeforeSend}`);
 
     monitorInterval = setInterval(() => {
         if (!engineActive || isStopping) {
             clearInterval(monitorInterval);
-            console.log("[Monitor] Dihentikan (engine off).");
             return;
         }
 
         monitorTick++;
 
-        // 1. DETEKSI TOMBOL AJAIB CHATGPT
+        // 1. DETEKSI TOMBOL AJAIB
         const allButtons = Array.from(document.querySelectorAll('button'));
-
-        const continueBtn = allButtons.find(btn => btn.innerText.toLowerCase().includes('continue generating') || btn.innerText.toLowerCase().includes('lanjutkan'));
+        const continueBtn = allButtons.find(btn => {
+            const t = btn.innerText.toLowerCase();
+            return t.includes('continue generating') || t.includes('lanjutkan');
+        });
         if (continueBtn) {
-            console.log("[Monitor] GPT kehabisan nafas. Mengeklik 'Continue generating'...");
+            console.log("[Monitor] Klik 'Continue generating'...");
             continueBtn.click();
             return;
         }
 
-        const regenerateBtn = allButtons.find(btn => btn.innerText.toLowerCase().includes('regenerate') || btn.innerText.toLowerCase().includes('coba lagi'));
-        const isErrorVisible = document.querySelector('.text-red-500') || document.querySelector('.bg-red-500');
-
-        if (regenerateBtn && isErrorVisible) {
+        const regenerateBtn = allButtons.find(btn => {
+            const t = btn.innerText.toLowerCase();
+            return t.includes('regenerate') || t.includes('coba lagi');
+        });
+        if (regenerateBtn && (document.querySelector('.text-red-500') || document.querySelector('.bg-red-500'))) {
             errorStuckCounter++;
             if (errorStuckCounter > 3) {
-                console.warn("[Monitor] Error ChatGPT terdeteksi! Regenerate...");
                 regenerateBtn.click();
                 errorStuckCounter = 0;
             }
             return;
         }
 
-        // 2. DETEKSI STATUS NGETIK
+        // 2. DETEKSI TYPING
         const isTyping = document.querySelector('button[data-testid="stop-button"]') ||
                          document.querySelector('button[aria-label*="Stop"]') ||
                          document.querySelector('.result-streaming');
-        const sendButton = document.querySelector('button[data-testid="send-button"]') ||
-                           document.querySelector('button[aria-label="Send message"]') ||
-                           document.querySelector('button[aria-label="Send prompt"]');
-        const allMessages = document.querySelectorAll('div[data-message-author-role="assistant"]');
-
-        // Debug log setiap 5 tick (15 detik)
-        if (monitorTick % 5 === 0) {
-            console.log(`[Monitor] Tick #${monitorTick} | Typing: ${!!isTyping} | SendBtn: ${!!sendButton} | Messages: ${allMessages.length}`);
-        }
 
         if (isTyping) {
             if (monitorTick % 3 === 0) console.log("[Monitor] GPT sedang mengetik...");
-            return; // Tunggu selesai
+            return;
         }
 
-        // GPT tidak sedang mengetik — cek apakah ada pesan baru
-        if (!continueBtn) {
-            if (allMessages.length === 0) {
-                if (monitorTick % 5 === 0) console.log("[Monitor] Belum ada pesan assistant.");
-                return;
-            }
+        // 3. GPT SELESAI — cari pesan BARU
+        if (continueBtn) return;
 
-            const lastMessage = allMessages[allMessages.length - 1];
+        // Coba cari pesan lewat berbagai metode
+        const allAssistant = document.querySelectorAll('[data-message-author-role="assistant"]');
+        const allTurns = document.querySelectorAll('article[data-testid^="conversation-turn"]');
 
-            if (lastMessage && !lastMessage.getAttribute('data-processed')) {
-                lastMessage.setAttribute('data-processed', 'true');
-                clearInterval(monitorInterval);
+        if (monitorTick % 5 === 0) {
+            console.log(`[Monitor] Tick #${monitorTick} | MsgRole: ${allAssistant.length} | Turns: ${allTurns.length}`);
+        }
 
-                // Coba berbagai selector untuk ambil teks GPT
-                const textElement = lastMessage.querySelector('.markdown') ||
-                                    lastMessage.querySelector('.prose') ||
-                                    lastMessage.querySelector('.whitespace-pre-wrap') ||
-                                    lastMessage.querySelector('[data-message-id]') ||
-                                    lastMessage;
+        // Hanya proses kalau ada pesan BARU (lebih banyak dari sebelum send)
+        if (allAssistant.length <= messageCountBeforeSend && allTurns.length === 0) {
+            return;
+        }
 
-                // Ambil innerText dari elemen terbesar yang punya konten
-                let fullText = textElement.innerText.trim();
+        // STRATEGI AMBIL TEKS: coba beberapa cara
+        let fullText = "";
 
-                // Fallback: kalau masih kosong/pendek, ambil dari lastMessage langsung
-                if (fullText.length < 20) {
-                    fullText = lastMessage.innerText.trim();
-                }
-                // Fallback 2: coba dari semua <p> di dalam message
-                if (fullText.length < 20) {
-                    const paragraphs = lastMessage.querySelectorAll('p');
-                    fullText = Array.from(paragraphs).map(p => p.innerText).join('\n').trim();
-                }
-
-                const wordCount = fullText.trim().split(/\s+/).filter(w => w.length > 0).length;
-
-                let lastParagraph = fullText.substring(fullText.length - 300).trim();
-                lastParagraph = lastParagraph.replace(/\n/g, ' ');
-
-                console.log(`[Monitor] ✅ AI Selesai! ${wordCount} kata (${fullText.length} chars).`);
-                console.log(`[Monitor] Preview: "${fullText.substring(0, 100)}..."`);
-
-                try {
-                    chrome.runtime.sendMessage({
-                        type: "GPT_DONE",
-                        fullText: fullText,
-                        wordCount: wordCount,
-                        lastParagraph: lastParagraph
-                    });
-                } catch (error) {
-                    console.error("[Monitor] Gagal kirim GPT_DONE:", error);
+        // Cara 1: Dari article conversation turn terakhir
+        if (allTurns.length > 0) {
+            const lastTurn = allTurns[allTurns.length - 1];
+            if (!lastTurn.getAttribute('data-ink-processed')) {
+                fullText = lastTurn.innerText.trim();
+                if (fullText.length > 20) {
+                    lastTurn.setAttribute('data-ink-processed', 'true');
+                    console.log("[Monitor] Teks diambil dari article turn.");
                 }
             }
+        }
+
+        // Cara 2: Dari div[data-message-author-role="assistant"] terakhir yang belum diproses
+        if (fullText.length < 20 && allAssistant.length > messageCountBeforeSend) {
+            const lastMsg = allAssistant[allAssistant.length - 1];
+            if (!lastMsg.getAttribute('data-processed')) {
+                lastMsg.setAttribute('data-processed', 'true');
+
+                // Debug: log isi element
+                console.log("[Monitor] DEBUG lastMsg tag:", lastMsg.tagName, "class:", lastMsg.className);
+                console.log("[Monitor] DEBUG children:", lastMsg.children.length, "innerHTML (200):", lastMsg.innerHTML.substring(0, 200));
+                console.log("[Monitor] DEBUG innerText (200):", lastMsg.innerText.substring(0, 200));
+                console.log("[Monitor] DEBUG textContent (200):", lastMsg.textContent.substring(0, 200));
+
+                // Coba dari parent/ancestor
+                const article = lastMsg.closest('article');
+                if (article) {
+                    fullText = article.innerText.trim();
+                    console.log("[Monitor] Teks dari closest article:", fullText.length, "chars");
+                }
+                if (fullText.length < 20) {
+                    fullText = lastMsg.textContent.trim();
+                }
+                if (fullText.length < 20) {
+                    fullText = lastMsg.innerText.trim();
+                }
+            }
+        }
+
+        // Cara 3: Cari semua .markdown di halaman, ambil yang terakhir belum diproses
+        if (fullText.length < 20) {
+            const allMarkdown = document.querySelectorAll('.markdown, .prose, [class*="markdown"]');
+            for (let i = allMarkdown.length - 1; i >= 0; i--) {
+                if (!allMarkdown[i].getAttribute('data-ink-processed')) {
+                    const txt = allMarkdown[i].innerText.trim();
+                    if (txt.length > 20) {
+                        fullText = txt;
+                        allMarkdown[i].setAttribute('data-ink-processed', 'true');
+                        console.log("[Monitor] Teks dari .markdown global:", fullText.length, "chars");
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Masih kosong? Skip, jangan kirim GPT_DONE kosong
+        if (fullText.length < 20) {
+            if (monitorTick % 5 === 0) console.log("[Monitor] Pesan ditemukan tapi teks kosong. Menunggu...");
+            return;
+        }
+
+        // SUKSES — kirim ke background
+        clearInterval(monitorInterval);
+
+        const wordCount = fullText.trim().split(/\s+/).filter(w => w.length > 0).length;
+        let lastParagraph = fullText.substring(fullText.length - 300).trim().replace(/\n/g, ' ');
+
+        console.log(`[Monitor] ✅ AI Selesai! ${wordCount} kata (${fullText.length} chars).`);
+        console.log(`[Monitor] Preview: "${fullText.substring(0, 120)}..."`);
+
+        try {
+            chrome.runtime.sendMessage({
+                type: "GPT_DONE",
+                fullText: fullText,
+                wordCount: wordCount,
+                lastParagraph: lastParagraph
+            });
+        } catch (error) {
+            console.error("[Monitor] Gagal kirim GPT_DONE:", error);
         }
     }, 3000);
 }
