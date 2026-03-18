@@ -331,10 +331,32 @@ function mulaiMemonitor() {
             return;
         }
 
-        // 5. Tidak pernah ngetik? Mungkin pesan langsung muncul
-        if (!wasTyping && monitorTick % 5 === 0) {
+        // 5. Belum pernah deteksi typing — coba tangkap teks periodik
+        if (!wasTyping) {
             captureStreamingText();
-            console.log(`[Monitor] Tick #${monitorTick} | Belum typing | Captured: ${lastCapturedText.length} chars`);
+
+            if (monitorTick % 5 === 0) {
+                console.log(`[Monitor] Tick #${monitorTick} | Belum typing | Captured: ${lastCapturedText.length} chars`);
+            }
+
+            // Kalau ada teks tertangkap tapi typing tidak pernah terdeteksi,
+            // tunggu 10 tick (30 detik) lalu proses teks yang ada
+            if (lastCapturedText.length > 50 && monitorTick >= 10) {
+                console.log(`[Monitor] Ada teks ${lastCapturedText.length} chars tanpa typing terdeteksi. Proses langsung!`);
+                clearInterval(monitorInterval);
+
+                const fullText = lastCapturedText;
+                const wordCount = fullText.trim().split(/\s+/).filter(w => w.length > 0).length;
+                let lastParagraph = fullText.substring(fullText.length - 300).trim().replace(/\n/g, ' ');
+
+                console.log(`[Monitor] AI Selesai! ${wordCount} kata (${fullText.length} chars).`);
+                try {
+                    chrome.runtime.sendMessage({ type: "GPT_DONE", fullText, wordCount, lastParagraph });
+                } catch (e) { console.error("[Monitor] Gagal kirim:", e); }
+
+                lastCapturedText = "";
+                return;
+            }
         }
 
     }, 3000);

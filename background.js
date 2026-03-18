@@ -240,6 +240,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
 
         console.log(`[Background] GPT_DONE diterima dari tab ${tabId} | Phase: ${tabState.phase} | Words: ${message.wordCount}`);
+        sendResponse({ status: "received" }); // Tutup channel langsung, async lanjut sendiri
 
         (async () => {
             try {
@@ -333,6 +334,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }
         })();
 
-        return true; // Jaga channel tetap terbuka untuk async
+        return true;
     }
 });
