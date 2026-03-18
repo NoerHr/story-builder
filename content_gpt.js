@@ -179,7 +179,7 @@ function mulaiMemonitor() {
     let lastCapturedText = "";    // Teks yang ditangkap selama GPT ngetik
     let wasTyping = false;        // Apakah sebelumnya GPT sedang ngetik
     let doneWaitTicks = 0;        // Tunggu beberapa tick setelah berhenti ngetik
-    const MAX_TYPING_TICKS = 40;  // 2 menit timeout
+    const MAX_TYPING_TICKS = 20;  // 20 x 3 detik = 60 detik timeout
 
     // Snapshot teks halaman SEBELUM GPT jawab
     const pageTextBefore = getMainText();
@@ -237,12 +237,36 @@ function mulaiMemonitor() {
                 console.log(`[Monitor] GPT mengetik... ${typingTicks * 3}s | Captured: ${lastCapturedText.length} chars`);
             }
 
-            // Timeout 2 menit
+            // Timeout 60 detik — paksa stop, ambil teks yang sudah ada
             if (typingTicks >= MAX_TYPING_TICKS) {
-                console.warn("[Monitor] GPT stuck > 2 menit! Paksa stop...");
-                if (stopButton) stopButton.click();
+                console.warn(`[Monitor] GPT stuck > ${MAX_TYPING_TICKS * 3}s! Paksa stop & ambil teks...`);
+                // Tangkap teks terakhir sebelum stop
+                captureStreamingText();
+                // Klik stop button
+                if (stopButton) {
+                    stopButton.click();
+                    console.log("[Monitor] Stop button diklik.");
+                }
+                // Langsung proses teks yang ada, jangan tunggu
+                wasTyping = true;
                 typingTicks = 0;
-                // Jangan return, lanjut proses teks yang ada
+                // Force skip ke proses teks di bawah
+                setTimeout(() => {
+                    captureStreamingText();
+                    if (lastCapturedText.length > 20) {
+                        clearInterval(monitorInterval);
+                        const fullText = lastCapturedText;
+                        const wordCount = fullText.trim().split(/\s+/).filter(w => w.length > 0).length;
+                        let lastParagraph = fullText.substring(fullText.length - 300).trim().replace(/\n/g, ' ');
+                        console.log(`[Monitor] FORCE SELESAI! ${wordCount} kata (${fullText.length} chars).`);
+                        try {
+                            chrome.runtime.sendMessage({ type: "GPT_DONE", fullText, wordCount, lastParagraph });
+                        } catch (e) { console.error("[Monitor] Gagal kirim:", e); }
+                        wasTyping = false;
+                        lastCapturedText = "";
+                    }
+                }, 3000);
+                return;
             } else {
                 return;
             }
