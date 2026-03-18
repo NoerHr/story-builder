@@ -258,14 +258,33 @@ function mulaiMemonitor() {
                 lastMessage.setAttribute('data-processed', 'true');
                 clearInterval(monitorInterval);
 
-                const textElement = lastMessage.querySelector('.markdown') || lastMessage;
-                const fullText = textElement.innerText;
-                const wordCount = fullText.trim().split(/\s+/).length;
+                // Coba berbagai selector untuk ambil teks GPT
+                const textElement = lastMessage.querySelector('.markdown') ||
+                                    lastMessage.querySelector('.prose') ||
+                                    lastMessage.querySelector('.whitespace-pre-wrap') ||
+                                    lastMessage.querySelector('[data-message-id]') ||
+                                    lastMessage;
+
+                // Ambil innerText dari elemen terbesar yang punya konten
+                let fullText = textElement.innerText.trim();
+
+                // Fallback: kalau masih kosong/pendek, ambil dari lastMessage langsung
+                if (fullText.length < 20) {
+                    fullText = lastMessage.innerText.trim();
+                }
+                // Fallback 2: coba dari semua <p> di dalam message
+                if (fullText.length < 20) {
+                    const paragraphs = lastMessage.querySelectorAll('p');
+                    fullText = Array.from(paragraphs).map(p => p.innerText).join('\n').trim();
+                }
+
+                const wordCount = fullText.trim().split(/\s+/).filter(w => w.length > 0).length;
 
                 let lastParagraph = fullText.substring(fullText.length - 300).trim();
                 lastParagraph = lastParagraph.replace(/\n/g, ' ');
 
-                console.log(`[Monitor] ✅ AI Selesai! ${wordCount} kata. Mengirim GPT_DONE...`);
+                console.log(`[Monitor] ✅ AI Selesai! ${wordCount} kata (${fullText.length} chars).`);
+                console.log(`[Monitor] Preview: "${fullText.substring(0, 100)}..."`);
 
                 try {
                     chrome.runtime.sendMessage({
