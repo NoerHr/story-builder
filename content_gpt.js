@@ -194,6 +194,8 @@ function mulaiMemonitor() {
 
     let errorStuckCounter = 0;
     let monitorTick = 0;
+    let typingTicks = 0; // Hitung berapa lama GPT ngetik
+    const MAX_TYPING_TICKS = 40; // 40 x 3 detik = 2 menit max ngetik
 
     // Hitung pesan yang sudah ada SEBELUM GPT mulai jawab
     const existingMessages = document.querySelectorAll('[data-message-author-role="assistant"]');
@@ -236,14 +238,30 @@ function mulaiMemonitor() {
             return;
         }
 
-        // 2. DETEKSI TYPING
-        const isTyping = document.querySelector('button[data-testid="stop-button"]') ||
-                         document.querySelector('button[aria-label*="Stop"]') ||
-                         document.querySelector('.result-streaming');
+        // 2. DETEKSI TYPING + TIMEOUT
+        const stopButton = document.querySelector('button[data-testid="stop-button"]') ||
+                           document.querySelector('button[aria-label*="Stop"]');
+        const isStreaming = document.querySelector('.result-streaming');
+        const isTyping = stopButton || isStreaming;
 
         if (isTyping) {
-            if (monitorTick % 3 === 0) console.log("[Monitor] GPT sedang mengetik...");
-            return;
+            typingTicks++;
+            if (monitorTick % 3 === 0) console.log(`[Monitor] GPT sedang mengetik... (${typingTicks * 3}s / ${MAX_TYPING_TICKS * 3}s)`);
+
+            // TIMEOUT: GPT ngetik > 2 menit → paksa stop & ambil teks yang ada
+            if (typingTicks >= MAX_TYPING_TICKS) {
+                console.warn("[Monitor] GPT stuck ngetik > 2 menit! Paksa stop...");
+                if (stopButton) {
+                    stopButton.click();
+                    console.log("[Monitor] Tombol Stop diklik. Ambil teks yang sudah ada...");
+                }
+                // Jangan return, lanjut ke proses ambil teks di bawah
+                typingTicks = 0;
+            } else {
+                return;
+            }
+        } else {
+            typingTicks = 0; // Reset kalau sudah tidak ngetik
         }
 
         // 3. GPT SELESAI — cari pesan BARU
