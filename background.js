@@ -14,7 +14,44 @@ let projectState = {
     tabs: {} 
 };
 
-console.log("[Background] Pabrik Cerita Otonom (V6.6 - Final Masterpiece) Berjalan.");
+console.log("[Background] Pabrik Cerita Otonom (V7.0 - Persistent Buffer) Berjalan.");
+
+// === PERSISTENT STATE: Simpan & pulihkan dari chrome.storage.local ===
+function saveStateToDisk() {
+    const saveData = {
+        isActive: projectState.isActive,
+        gptUrl: projectState.gptUrl,
+        maxDocs: projectState.maxDocs,
+        maxStoriesPerDoc: projectState.maxStoriesPerDoc,
+        targetWords: projectState.targetWords,
+        currentDocId: projectState.currentDocId,
+        docsCreated: projectState.docsCreated,
+        storiesInCurrentDoc: projectState.storiesInCurrentDoc,
+        totalStoriesGlobal: projectState.totalStoriesGlobal,
+        tabs: projectState.tabs
+    };
+    chrome.storage.local.set({ _engineState: saveData });
+}
+
+// Pulihkan state saat service worker restart
+chrome.storage.local.get(['_engineState'], (result) => {
+    if (result._engineState) {
+        const s = result._engineState;
+        projectState.isActive = s.isActive || false;
+        projectState.gptUrl = s.gptUrl || "https://chatgpt.com/";
+        projectState.maxDocs = s.maxDocs || 3;
+        projectState.maxStoriesPerDoc = s.maxStoriesPerDoc || 9;
+        projectState.targetWords = s.targetWords || 15000;
+        projectState.currentDocId = s.currentDocId || null;
+        projectState.docsCreated = s.docsCreated || 0;
+        projectState.storiesInCurrentDoc = s.storiesInCurrentDoc || 0;
+        projectState.totalStoriesGlobal = s.totalStoriesGlobal || 0;
+        projectState.tabs = s.tabs || {};
+        if (projectState.isActive) {
+            console.log("[Background] State dipulihkan dari storage! Engine masih aktif.", projectState);
+        }
+    }
+});
 
 async function getAuthToken() {
     return new Promise((resolve, reject) => {
@@ -96,9 +133,10 @@ async function saveFullStoryToDoc(tabId) {
         }
 
         // UPDATE ANGKA JIKA SUKSES
-        tabState.storyBuffer = ""; 
+        tabState.storyBuffer = "";
         projectState.totalStoriesGlobal++;
         projectState.storiesInCurrentDoc++;
+        saveStateToDisk(); // Persist setelah save ke Doc berhasil
 
         // 1. Cek target keseluruhan
         if (projectState.totalStoriesGlobal >= (projectState.maxDocs * projectState.maxStoriesPerDoc)) {
@@ -155,10 +193,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         for(let i = 0; i < 3; i++) {
             chrome.tabs.create({ url: projectState.gptUrl || "https://chatgpt.com/", active: false }, (newTab) => {
                 projectState.tabs[newTab.id] = { phase: "IDLE", wordCount: 0, storyNumber: 0, currentIdea: "", storyBuffer: "" };
+                saveStateToDisk();
             });
         }
+        saveStateToDisk();
         sendResponse({ status: "started" });
-        return true; 
+        return true;
     }
 
     if (message.type === "STOP_ENGINE") {
@@ -166,6 +206,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         Object.keys(projectState.tabs).forEach(tabIdStr => {
             chrome.tabs.sendMessage(parseInt(tabIdStr), { type: "STOP_TYPING" }).catch(() => {});
         });
+        saveStateToDisk();
         sendResponse({ status: "stopped" });
         return true;
     }
@@ -213,9 +254,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }
 
             if (tabState.phase === "GENERATING" || tabState.phase === "FINISHING") {
-                
+
                 tabState.storyBuffer += message.fullText + "\n\n";
                 tabState.wordCount += message.wordCount;
+                console.log(`[Background] Tab ${tabId} buffer: ${tabState.wordCount} kata`);
+                saveStateToDisk(); // Persist buffer setiap chunk
                 
                 let nextPrompt = "";
                 let nextPhase = "";
