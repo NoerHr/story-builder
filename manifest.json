@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "InkFlow AI: GPT-to-Doc Automator",
+  "version": "1.0",
+  "description": "Otomasi ChatGPT ke Google Docs dengan logika 9-tab dan multi-file untuk alur kerja tanpa batas.",
+  "permissions": [
+    "tabs",
+    "scripting",
+    "storage",
+    "identity",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "https://docs.google.com/*",
+    "https://www.googleapis.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "oauth2": {
+    "client_id": "153662079704-o3a62bea0ean9lfgmp6i444ko3tbmtlg.apps.googleusercontent.comini ",
+    "scopes": [
+      "https://www.googleapis.com/auth/documents",
+      "https://www.googleapis.com/auth/drive.file"
+    ]
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://chatgpt.com/*"],
+      "js": ["content_gpt.js"]
+    },
+    {
+      "matches": ["https://docs.google.com/document/*"],
+      "js": ["content_doc.js"]
+    }
+  ]
+}
