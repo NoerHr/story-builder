@@ -69,58 +69,125 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 });
 
-// FUNGSI INJEKSI V6.7 (SUPER SPESIFIK KE PROSEMIRROR & ANTI CRASH)
+// FUNGSI INJEKSI V7.0 (MULTI-METHOD + LOGGING)
 function injectTextAndSend(text, retryCount = 0) {
-    if(!engineActive || isStopping) return false; 
-    
+    if(!engineActive || isStopping) return false;
+
     let textarea = document.querySelector('div.ProseMirror#prompt-textarea[contenteditable="true"]');
     if (!textarea) textarea = document.querySelector('#prompt-textarea');
 
     if (!textarea || textarea.style.display === 'none') {
         if (retryCount < 10) {
-            console.warn("[Content Script] ProseMirror belum siap, mencoba ulang injeksi...");
+            console.warn("[Content Script] ProseMirror belum siap, retry injeksi ke-" + (retryCount + 1));
             setTimeout(() => injectTextAndSend(text, retryCount + 1), 2000);
         }
         return false;
     }
 
-    console.log("[Content Script] Menyiapkan injeksi teks ProseMirror Native...");
+    console.log("[Content Script] Menyiapkan injeksi teks...");
     textarea.focus();
-    
+
+    let injected = false;
+
+    // METODE 1: execCommand insertText (paling reliable untuk contenteditable)
     try {
-        const selection = window.getSelection();
+        textarea.focus();
+        // Kosongkan dulu isi lama
+        textarea.innerHTML = '<p><br></p>';
+
+        const sel = window.getSelection();
         const range = document.createRange();
         range.selectNodeContents(textarea);
-        selection.removeAllRanges();
-        selection.addRange(range);
+        range.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(range);
+
+        injected = document.execCommand('insertText', false, text);
+        if (injected) {
+            console.log("[Content Script] Metode 1 (execCommand) BERHASIL.");
+        }
     } catch (e) {
-        console.warn("[Content Script] Gagal select teks, melanjutkan paste...", e);
+        console.warn("[Content Script] Metode 1 (execCommand) gagal:", e.message);
     }
 
-    const dataTransfer = new DataTransfer();
-    dataTransfer.setData('text/plain', text);
-    const pasteEvent = new ClipboardEvent('paste', { clipboardData: dataTransfer, bubbles: true, cancelable: true });
-    textarea.dispatchEvent(pasteEvent);
-    
-    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    // METODE 2: ClipboardEvent paste (fallback)
+    if (!injected || textarea.textContent.trim().length < 10) {
+        console.log("[Content Script] Mencoba Metode 2 (paste event)...");
+        try {
+            const dataTransfer = new DataTransfer();
+            dataTransfer.setData('text/plain', text);
+            const pasteEvent = new ClipboardEvent('paste', { clipboardData: dataTransfer, bubbles: true, cancelable: true });
+            textarea.dispatchEvent(pasteEvent);
 
+            if (textarea.textContent.trim().length > 10) {
+                console.log("[Content Script] Metode 2 (paste) BERHASIL.");
+                injected = true;
+            }
+        } catch (e) {
+            console.warn("[Content Script] Metode 2 (paste) gagal:", e.message);
+        }
+    }
+
+    // METODE 3: Set innerHTML langsung (last resort)
+    if (!injected || textarea.textContent.trim().length < 10) {
+        console.log("[Content Script] Mencoba Metode 3 (innerHTML direct)...");
+        try {
+            const paragraphs = text.split('\n').map(line => `<p>${line || '<br>'}</p>`).join('');
+            textarea.innerHTML = paragraphs;
+            textarea.dispatchEvent(new Event('input', { bubbles: true }));
+            console.log("[Content Script] Metode 3 (innerHTML) diterapkan.");
+            injected = true;
+        } catch (e) {
+            console.warn("[Content Script] Metode 3 (innerHTML) gagal:", e.message);
+        }
+    }
+
+    // Verifikasi isi textarea
+    const currentContent = textarea.textContent.trim();
+    console.log("[Content Script] Isi textarea setelah injeksi:", currentContent.substring(0, 80) + "...", `(${currentContent.length} chars)`);
+
+    if (currentContent.length < 10) {
+        console.error("[Content Script] SEMUA METODE GAGAL! Textarea kosong.");
+        if (retryCount < 5) {
+            setTimeout(() => injectTextAndSend(text, retryCount + 1), 3000);
+        }
+        return false;
+    }
+
+    // Trigger input event agar ChatGPT React mendeteksi perubahan
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    textarea.dispatchEvent(new Event('change', { bubbles: true }));
+
+    // Cari dan klik tombol Send
     setTimeout(() => {
-        if(!engineActive || isStopping) return; 
-        
-        const sendButton = document.querySelector('button[data-testid="send-button"]') || 
-                           document.querySelector('button[aria-label="Send message"]');
-                           
+        if(!engineActive || isStopping) return;
+
+        // Coba semua kemungkinan selector tombol send
+        const sendButton = document.querySelector('button[data-testid="send-button"]') ||
+                           document.querySelector('button[aria-label="Send message"]') ||
+                           document.querySelector('button[aria-label="Send prompt"]') ||
+                           document.querySelector('form button[type="submit"]') ||
+                           document.querySelector('button.btn-primary svg')?.closest('button');
+
+        console.log("[Content Script] Tombol Send ditemukan:", !!sendButton);
+
         if (sendButton) {
             sendButton.removeAttribute('disabled');
             sendButton.click();
-            mulaiMemonitor(); 
+            console.log("[Content Script] Tombol Send diklik!");
+            mulaiMemonitor();
         } else {
-            console.warn("[Content Script] Tombol send tidak ada, memaksa Enter...");
-            const enterEvent = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Enter', code: 'Enter', keyCode: 13 });
+            // Fallback: Enter key
+            console.warn("[Content Script] Tombol send tidak ditemukan. Mencoba Enter...");
+            textarea.focus();
+            const enterEvent = new KeyboardEvent('keydown', {
+                bubbles: true, cancelable: true,
+                key: 'Enter', code: 'Enter', keyCode: 13, which: 13
+            });
             textarea.dispatchEvent(enterEvent);
             mulaiMemonitor();
         }
-    }, 1500); 
+    }, 2000);
 }
 
 function mulaiMemonitor() {
