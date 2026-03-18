@@ -69,7 +69,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 });
 
-// FUNGSI INJEKSI V7.0 (MULTI-METHOD + LOGGING)
+// FUNGSI INJEKSI V7.1 (PASTE-FIRST, TANPA innerHTML)
 function injectTextAndSend(text, retryCount = 0) {
     if(!engineActive || isStopping) return false;
 
@@ -78,131 +78,112 @@ function injectTextAndSend(text, retryCount = 0) {
 
     if (!textarea || textarea.style.display === 'none') {
         if (retryCount < 10) {
-            console.warn("[Content Script] ProseMirror belum siap, retry injeksi ke-" + (retryCount + 1));
+            console.warn("[Inject] ProseMirror belum siap, retry ke-" + (retryCount + 1));
             setTimeout(() => injectTextAndSend(text, retryCount + 1), 2000);
         }
         return false;
     }
 
-    console.log("[Content Script] Menyiapkan injeksi teks...");
+    console.log("[Inject] Mulai injeksi teks ke ProseMirror...");
     textarea.focus();
 
-    let injected = false;
+    // Kosongkan isi lama via execCommand (ProseMirror-safe, JANGAN pakai innerHTML)
+    document.execCommand('selectAll');
+    document.execCommand('delete');
 
-    // METODE 1: execCommand insertText (paling reliable untuk contenteditable)
+    // METODE UTAMA: ClipboardEvent paste (terbukti trigger ProseMirror state)
     try {
-        textarea.focus();
-        // Kosongkan dulu isi lama
-        textarea.innerHTML = '<p><br></p>';
-
-        const sel = window.getSelection();
-        const range = document.createRange();
-        range.selectNodeContents(textarea);
-        range.collapse(false);
-        sel.removeAllRanges();
-        sel.addRange(range);
-
-        injected = document.execCommand('insertText', false, text);
-        if (injected) {
-            console.log("[Content Script] Metode 1 (execCommand) BERHASIL.");
-        }
+        const dataTransfer = new DataTransfer();
+        dataTransfer.setData('text/plain', text);
+        const pasteEvent = new ClipboardEvent('paste', {
+            clipboardData: dataTransfer,
+            bubbles: true,
+            cancelable: true
+        });
+        textarea.dispatchEvent(pasteEvent);
+        console.log("[Inject] Paste event dispatched.");
     } catch (e) {
-        console.warn("[Content Script] Metode 1 (execCommand) gagal:", e.message);
+        console.warn("[Inject] Paste gagal:", e.message);
     }
 
-    // METODE 2: ClipboardEvent paste (fallback)
-    if (!injected || textarea.textContent.trim().length < 10) {
-        console.log("[Content Script] Mencoba Metode 2 (paste event)...");
-        try {
-            const dataTransfer = new DataTransfer();
-            dataTransfer.setData('text/plain', text);
-            const pasteEvent = new ClipboardEvent('paste', { clipboardData: dataTransfer, bubbles: true, cancelable: true });
-            textarea.dispatchEvent(pasteEvent);
-
-            if (textarea.textContent.trim().length > 10) {
-                console.log("[Content Script] Metode 2 (paste) BERHASIL.");
-                injected = true;
-            }
-        } catch (e) {
-            console.warn("[Content Script] Metode 2 (paste) gagal:", e.message);
-        }
-    }
-
-    // METODE 3: Set innerHTML langsung (last resort)
-    if (!injected || textarea.textContent.trim().length < 10) {
-        console.log("[Content Script] Mencoba Metode 3 (innerHTML direct)...");
-        try {
-            const paragraphs = text.split('\n').map(line => `<p>${line || '<br>'}</p>`).join('');
-            textarea.innerHTML = paragraphs;
-            textarea.dispatchEvent(new Event('input', { bubbles: true }));
-            console.log("[Content Script] Metode 3 (innerHTML) diterapkan.");
-            injected = true;
-        } catch (e) {
-            console.warn("[Content Script] Metode 3 (innerHTML) gagal:", e.message);
-        }
-    }
-
-    // Verifikasi isi textarea
-    const currentContent = textarea.textContent.trim();
-    console.log("[Content Script] Isi textarea setelah injeksi:", currentContent.substring(0, 80) + "...", `(${currentContent.length} chars)`);
-
-    if (currentContent.length < 10) {
-        console.error("[Content Script] SEMUA METODE GAGAL! Textarea kosong.");
-        if (retryCount < 5) {
-            setTimeout(() => injectTextAndSend(text, retryCount + 1), 3000);
-        }
-        return false;
-    }
-
-    // Trigger event chain agar React/ProseMirror mendeteksi perubahan
-    textarea.dispatchEvent(new Event('input', { bubbles: true }));
-
-    // Cari dan klik tombol Send
+    // Cek apakah paste berhasil, kalau tidak coba execCommand
     setTimeout(() => {
-        if(!engineActive || isStopping) return;
+        const content = textarea.textContent.trim();
+        if (content.length < 10) {
+            console.warn("[Inject] Paste tidak masuk. Fallback ke execCommand...");
+            textarea.focus();
+            document.execCommand('selectAll');
+            document.execCommand('delete');
+            document.execCommand('insertText', false, text);
+        }
 
-        // Coba semua kemungkinan selector tombol send
-        const sendButton = document.querySelector('button[data-testid="send-button"]') ||
-                           document.querySelector('button[aria-label="Send message"]') ||
-                           document.querySelector('button[aria-label="Send prompt"]') ||
-                           document.querySelector('form button[type="submit"]');
+        const finalContent = textarea.textContent.trim();
+        console.log("[Inject] Isi textarea:", finalContent.substring(0, 80) + "...", `(${finalContent.length} chars)`);
 
-        console.log("[Content Script] Tombol Send ditemukan:", !!sendButton);
+        if (finalContent.length < 10) {
+            console.error("[Inject] Injeksi GAGAL total.");
+            if (retryCount < 5) {
+                setTimeout(() => injectTextAndSend(text, retryCount + 1), 3000);
+            }
+            return;
+        }
 
-        if (sendButton) {
-            sendButton.removeAttribute('disabled');
+        // Tunggu sebentar agar ProseMirror sync state ke React, lalu kirim
+        setTimeout(() => triggerSend(textarea), 1000);
+    }, 500);
+}
 
-            // Klik pakai MouseEvent agar React mendeteksinya
-            sendButton.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-            console.log("[Content Script] Tombol Send diklik (MouseEvent)!");
+function triggerSend(textarea) {
+    if(!engineActive || isStopping) return;
 
-            // Fallback: juga coba Enter di textarea setelah 500ms
-            setTimeout(() => {
-                // Cek apakah GPT mulai ngetik (ada stop button)
-                const isTyping = document.querySelector('button[data-testid="stop-button"]') ||
-                                 document.querySelector('button[aria-label*="Stop"]') ||
-                                 document.querySelector('.result-streaming');
-                if (!isTyping) {
-                    console.warn("[Content Script] GPT belum merespon setelah klik. Mencoba Enter...");
-                    textarea.focus();
-                    textarea.dispatchEvent(new KeyboardEvent('keydown', {
-                        key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
-                        bubbles: true, cancelable: true
-                    }));
-                }
-            }, 1500);
+    const sendButton = document.querySelector('button[data-testid="send-button"]') ||
+                       document.querySelector('button[aria-label="Send message"]') ||
+                       document.querySelector('button[aria-label="Send prompt"]');
 
+    console.log("[Send] Tombol Send ditemukan:", !!sendButton);
+    if (sendButton) console.log("[Send] Disabled?", sendButton.disabled, "| aria-disabled:", sendButton.getAttribute('aria-disabled'));
+
+    if (sendButton && !sendButton.disabled) {
+        sendButton.click();
+        console.log("[Send] Diklik via .click()!");
+        mulaiMemonitor();
+    } else {
+        // Tombol disabled atau tidak ada — coba Enter di form
+        console.warn("[Send] Tombol disabled/tidak ada. Coba submit form atau Enter...");
+
+        // Coba submit form langsung
+        const form = textarea.closest('form');
+        if (form) {
+            form.requestSubmit();
+            console.log("[Send] form.requestSubmit() dipanggil!");
             mulaiMemonitor();
         } else {
-            console.warn("[Content Script] Tombol send tidak ditemukan. Mencoba Enter...");
-            textarea.focus();
-            textarea.dispatchEvent(new KeyboardEvent('keydown', {
-                key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
-                bubbles: true, cancelable: true
-            }));
+            // Last resort: klik paksa
+            if (sendButton) {
+                sendButton.removeAttribute('disabled');
+                sendButton.click();
+                console.log("[Send] Klik paksa (disabled removed)!");
+            }
             mulaiMemonitor();
         }
-    }, 2000);
+    }
+
+    // Safety check: 3 detik setelah send, cek apakah GPT merespon
+    setTimeout(() => {
+        const isTyping = document.querySelector('button[data-testid="stop-button"]') ||
+                         document.querySelector('button[aria-label*="Stop"]') ||
+                         document.querySelector('.result-streaming');
+        if (!isTyping && engineActive && !isStopping) {
+            console.warn("[Send] GPT tidak merespon setelah 3 detik! Retry send...");
+            // Coba klik lagi
+            const btn = document.querySelector('button[data-testid="send-button"]') ||
+                        document.querySelector('button[aria-label="Send message"]');
+            if (btn) {
+                btn.removeAttribute('disabled');
+                btn.click();
+            }
+        }
+    }, 3000);
 }
 
 function mulaiMemonitor() {
