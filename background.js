@@ -14,7 +14,47 @@ let projectState = {
     tabs: {} 
 };
 
-console.log("[Background] Pabrik Cerita Otonom (V7.0 - Persistent Buffer) Berjalan.");
+console.log("[Background] Pabrik Cerita Otonom (V8.0 - Focus Queue) Berjalan.");
+
+// === FOCUS QUEUE: Antrian tab, tunggu INJECT terkirim baru pindah ===
+let focusQueue = [];
+let currentFocusTabId = null;
+
+function addToFocusQueue(tabId) {
+    if (!focusQueue.includes(tabId)) {
+        focusQueue.push(tabId);
+        console.log(`[Queue] Tab ${tabId} masuk antrian. Queue: [${focusQueue}]`);
+    }
+    // Kalau belum ada tab yang di-focus, langsung focus
+    if (!currentFocusTabId) {
+        focusNextTab();
+    }
+}
+
+function focusNextTab() {
+    if (focusQueue.length === 0) {
+        currentFocusTabId = null;
+        return;
+    }
+    currentFocusTabId = focusQueue.shift();
+    console.log(`[Queue] Focus ke Tab ${currentFocusTabId}. Sisa antrian: [${focusQueue}]`);
+    chrome.tabs.update(currentFocusTabId, { active: true }).catch(() => {
+        // Tab mungkin sudah ditutup, skip
+        currentFocusTabId = null;
+        focusNextTab();
+    });
+}
+
+function onInjectSent(tabId) {
+    if (tabId === currentFocusTabId) {
+        // INJECT sudah terkirim → tunggu 2 detik biar user lihat → pindah
+        setTimeout(() => {
+            console.log(`[Queue] INJECT terkirim di Tab ${tabId}. Pindah ke tab berikutnya...`);
+            currentFocusTabId = null;
+            focusNextTab();
+        }, 2000);
+    }
+}
 
 // === PERSISTENT STATE: Simpan & pulihkan dari chrome.storage.local ===
 function saveStateToDisk() {
@@ -186,6 +226,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             projectState.totalStoriesGlobal = 0;
             projectState.currentDocId = null;
             projectState.isWriting = false;
+            focusQueue = [];
+            currentFocusTabId = null;
 
             // Auto-Cleanup Zombie Tabs
             Object.keys(projectState.tabs).forEach(id => {
@@ -211,6 +253,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     if (message.type === "STOP_ENGINE") {
         projectState.isActive = false;
+        focusQueue = [];
+        currentFocusTabId = null;
         Object.keys(projectState.tabs).forEach(tabIdStr => {
             chrome.tabs.sendMessage(parseInt(tabIdStr), { type: "STOP_TYPING" }).catch(() => {});
         });
@@ -250,8 +294,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         console.log(`[Background] GPT_DONE diterima dari tab ${tabId} | Phase: ${tabState.phase} | Words: ${message.wordCount}`);
         sendResponse({ status: "received" }); // Tutup channel langsung, async lanjut sendiri
 
-        // Auto-focus ke tab yang selesai duluan
-        chrome.tabs.update(tabId, { active: true }).catch(() => {});
+        // Masukkan ke antrian focus
+        addToFocusQueue(tabId);
 
         (async () => {
             try {
@@ -272,6 +316,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                             console.error(`[Background] Gagal kirim INJECT ke tab ${tabId}:`, chrome.runtime.lastError.message);
                         } else {
                             console.log(`[Background] INJECT GENERATING terkirim ke tab ${tabId}`);
+                            onInjectSent(tabId);
                         }
                     });
                     return;
@@ -339,6 +384,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                                 console.error(`[Background] Gagal kirim INJECT ${nextPhase} ke tab ${tabId}:`, chrome.runtime.lastError.message);
                             } else {
                                 console.log(`[Background] INJECT ${nextPhase} terkirim ke tab ${tabId}`);
+                                onInjectSent(tabId);
                             }
                         });
                     }
