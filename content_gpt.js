@@ -241,11 +241,12 @@ function mulaiMemonitor() {
         }
 
         if (isTyping) {
-            console.log("[Monitor] GPT sedang mengetik...");
+            if (monitorTick % 3 === 0) console.log("[Monitor] GPT sedang mengetik...");
             return; // Tunggu selesai
         }
 
-        if (sendButton && !continueBtn) {
+        // GPT tidak sedang mengetik — cek apakah ada pesan baru
+        if (!continueBtn) {
             if (allMessages.length === 0) {
                 if (monitorTick % 5 === 0) console.log("[Monitor] Belum ada pesan assistant.");
                 return;
