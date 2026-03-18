@@ -343,41 +343,37 @@ function mulaiMemonitor() {
     function captureStreamingText() {
         let text = "";
 
-        // Cara 1: Dari elemen yang sedang streaming (.result-streaming)
-        const streaming = document.querySelector('.result-streaming');
+        // Cara 1: Dari .streaming-animation atau .result-streaming (PALING AKURAT saat ngetik)
+        const streaming = document.querySelector('.streaming-animation') || document.querySelector('.result-streaming');
         if (streaming) {
             text = streaming.innerText || streaming.textContent || "";
         }
 
-        // Cara 2: Dari <article> conversation turns — ambil yang terakhir
+        // Cara 2: Dari .text-message terakhir (sesuai debug: class mengandung "text-message")
         if (text.trim().length < 20) {
-            const turns = document.querySelectorAll('article[data-testid^="conversation-turn"]');
-            if (turns.length > 0) {
-                text = turns[turns.length - 1].innerText || "";
+            const textMsgs = document.querySelectorAll('.text-message');
+            if (textMsgs.length > 0) {
+                text = textMsgs[textMsgs.length - 1].innerText || "";
             }
         }
 
-        // Cara 3: Dari container utama chat — ambil semua teks setelah prompt terakhir
+        // Cara 3: Dari .markdown terakhir (class: "markdown prose dark:prose-invert")
         if (text.trim().length < 20) {
-            const mainEl = document.querySelector('main') || document.querySelector('[role="main"]');
-            if (mainEl) {
-                text = mainEl.innerText || "";
-                // Ambil hanya bagian setelah teks sebelumnya (kasar tapi jalan)
-                if (text.length > pageTextBefore.length) {
-                    text = text.substring(pageTextBefore.length);
-                }
+            const allMarkdown = document.querySelectorAll('[class*="markdown"]');
+            if (allMarkdown.length > 0) {
+                text = allMarkdown[allMarkdown.length - 1].innerText || "";
             }
         }
 
-        // Cara 4: Cari semua element dengan class mengandung "markdown"
+        // Cara 4: Dari div[data-message-author-role="assistant"] terakhir
         if (text.trim().length < 20) {
-            const allEls = document.querySelectorAll('[class*="markdown"], [class*="prose"]');
-            if (allEls.length > 0) {
-                text = allEls[allEls.length - 1].innerText || "";
+            const msgs = document.querySelectorAll('[data-message-author-role="assistant"]');
+            if (msgs.length > 0) {
+                text = msgs[msgs.length - 1].innerText || "";
             }
         }
 
-        text = text.trim();
+        text = cleanText(text);
         // Simpan jika lebih panjang dari yang sudah ditangkap
         if (text.length > lastCapturedText.length) {
             lastCapturedText = text;
@@ -385,8 +381,39 @@ function mulaiMemonitor() {
     }
 }
 
+// === HELPER: Bersihkan teks dari UI ChatGPT ===
+function cleanText(text) {
+    if (!text) return "";
+
+    // Hapus teks UI ChatGPT yang ikut tercapture
+    const uiStrings = [
+        "ChatGPT dapat membuat kesalahan. Periksa info penting.",
+        "ChatGPT can make mistakes. Check important info.",
+        "Lihat Preferensi Cookie",
+        "See Cookie Preferences",
+        "Upgrade plan",
+        "Tingkatkan paket",
+        "More models",
+        "GPT-4o",
+        "Temporary chat",
+        "Chat sementara",
+        "You said:",
+        "ChatGPT said:",
+    ];
+
+    let cleaned = text;
+    for (const ui of uiStrings) {
+        cleaned = cleaned.replaceAll(ui, '');
+    }
+
+    // Hapus baris kosong berlebih
+    cleaned = cleaned.replace(/\n{3,}/g, '\n\n').trim();
+
+    return cleaned;
+}
+
 // === HELPER: Ambil semua teks dari area chat utama ===
 function getMainText() {
     const mainEl = document.querySelector('main') || document.querySelector('[role="main"]') || document.body;
-    return (mainEl.innerText || "").trim();
+    return cleanText((mainEl.innerText || "").trim());
 }
