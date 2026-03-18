@@ -250,6 +250,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         console.log(`[Background] GPT_DONE diterima dari tab ${tabId} | Phase: ${tabState.phase} | Words: ${message.wordCount}`);
         sendResponse({ status: "received" }); // Tutup channel langsung, async lanjut sendiri
 
+        // Auto-focus ke tab yang selesai duluan
+        chrome.tabs.update(tabId, { active: true }).catch(() => {});
+
         (async () => {
             try {
                 if (tabState.phase === "BRAINSTORM") {
