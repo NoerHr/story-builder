@@ -233,63 +233,79 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === "GPT_DONE" && projectState.isActive) {
         let tabId = sender.tab.id;
         let tabState = projectState.tabs[tabId];
-        
-        if (!tabState) return;
+
+        if (!tabState) {
+            console.warn(`[Background] GPT_DONE dari tab ${tabId} tapi tab tidak terdaftar.`);
+            return;
+        }
+
+        console.log(`[Background] GPT_DONE diterima dari tab ${tabId} | Phase: ${tabState.phase} | Words: ${message.wordCount}`);
 
         (async () => {
-            
-            if (tabState.phase === "BRAINSTORM") {
-                const ideArray = message.fullText.split('\n').filter(line => line.trim().length > 15);
-                tabState.currentIdea = ideArray.length > 0 ? ideArray[Math.floor(Math.random() * ideArray.length)].trim() : "Sebuah kebohongan masa kecil yang mengubah hidupku.";
-                
-                tabState.phase = "GENERATING";
-                tabState.wordCount = 0;
-                tabState.storyBuffer = ""; 
+            try {
+                if (tabState.phase === "BRAINSTORM") {
+                    const ideArray = message.fullText.split('\n').filter(line => line.trim().length > 15);
+                    tabState.currentIdea = ideArray.length > 0 ? ideArray[Math.floor(Math.random() * ideArray.length)].trim() : "Sebuah kebohongan masa kecil yang mengubah hidupku.";
 
-                console.log(`[Background] Tab ${tabId} mulai menulis ide: ${tabState.currentIdea}`);
+                    tabState.phase = "GENERATING";
+                    tabState.wordCount = 0;
+                    tabState.storyBuffer = "";
+                    saveStateToDisk();
 
-                const promptMulai = `Bagus. Abaikan ide lainnya. Sekarang bertindaklah sebagai seorang penulis memoar profesional. Ciptakan cerita SANGAT UNIK dari ide ini: "${tabState.currentIdea}". \n\nKembangkan jadi kejadian mengejutkan. Tulis monolog sudut pandang ('Aku'). Mulai langsung dari insiden utama. \nPENTING: Ini monolog batin murni. DILARANG KERAS menggunakan percakapan, dialog, atau tanda kutip sama sekali.`;
-                chrome.tabs.sendMessage(tabId, { action: "INJECT", text: promptMulai, phase: "GENERATING" });
-                return;
-            }
+                    console.log(`[Background] Tab ${tabId} mulai menulis ide: ${tabState.currentIdea}`);
 
-            if (tabState.phase === "GENERATING" || tabState.phase === "FINISHING") {
-
-                tabState.storyBuffer += message.fullText + "\n\n";
-                tabState.wordCount += message.wordCount;
-                console.log(`[Background] Tab ${tabId} buffer: ${tabState.wordCount} kata`);
-                saveStateToDisk(); // Persist buffer setiap chunk
-                
-                let nextPrompt = "";
-                let nextPhase = "";
-
-                if (tabState.phase === "FINISHING") {
-                    console.log(`[Background] Tab ${tabId} Minta Save! Mengantre untuk akses Doc...`);
-                    
-                    let saveResult = await saveFullStoryToDoc(tabId);
-                    
-                    if (saveResult === "STOP_ALL") {
-                        projectState.isActive = false;
-                        Object.keys(projectState.tabs).forEach(id => {
-                            chrome.tabs.sendMessage(parseInt(id), { type: "STOP_TYPING" }).catch(() => {});
-                        });
-                        return; 
-                    }
-                    
-                    if (saveResult === "ERROR") return;
-
-                    // FITUR BARU: Anti-Crash jika tab sudah tertutup duluan
-                    console.log(`[Background] Menutup Tab ${tabId} dan membuat Tab Fresh baru...`);
-                    chrome.tabs.remove(tabId).catch(() => console.warn(`[Background] Tab ${tabId} sepertinya sudah ditutup manual.`)); 
-                    delete projectState.tabs[tabId]; 
-
-                    chrome.tabs.create({ url: projectState.gptUrl || "https://chatgpt.com/", active: false }, (newTab) => {
-                        projectState.tabs[newTab.id] = { phase: "IDLE", wordCount: 0, storyNumber: 0, currentIdea: "", storyBuffer: "" };
+                    const promptMulai = `Bagus. Abaikan ide lainnya. Sekarang bertindaklah sebagai seorang penulis memoar profesional. Ciptakan cerita SANGAT UNIK dari ide ini: "${tabState.currentIdea}". \n\nKembangkan jadi kejadian mengejutkan. Tulis monolog sudut pandang ('Aku'). Mulai langsung dari insiden utama. \nPENTING: Ini monolog batin murni. DILARANG KERAS menggunakan percakapan, dialog, atau tanda kutip sama sekali.`;
+                    chrome.tabs.sendMessage(tabId, { action: "INJECT", text: promptMulai, phase: "GENERATING" }, (resp) => {
+                        if (chrome.runtime.lastError) {
+                            console.error(`[Background] Gagal kirim INJECT ke tab ${tabId}:`, chrome.runtime.lastError.message);
+                        } else {
+                            console.log(`[Background] INJECT GENERATING terkirim ke tab ${tabId}`);
+                        }
                     });
+                    return;
+                }
 
-                    return; 
-                } 
-                else {
+                if (tabState.phase === "GENERATING" || tabState.phase === "FINISHING") {
+                    tabState.storyBuffer += message.fullText + "\n\n";
+                    tabState.wordCount += message.wordCount;
+                    console.log(`[Background] Tab ${tabId} buffer: ${tabState.wordCount} / ${projectState.targetWords} kata`);
+                    saveStateToDisk();
+
+                    if (tabState.phase === "FINISHING") {
+                        console.log(`[Background] Tab ${tabId} FINISHING! Menyimpan ke Doc...`);
+
+                        let saveResult = await saveFullStoryToDoc(tabId);
+
+                        if (saveResult === "STOP_ALL") {
+                            projectState.isActive = false;
+                            saveStateToDisk();
+                            Object.keys(projectState.tabs).forEach(id => {
+                                chrome.tabs.sendMessage(parseInt(id), { type: "STOP_TYPING" }).catch(() => {});
+                            });
+                            return;
+                        }
+
+                        if (saveResult === "ERROR") {
+                            console.error(`[Background] Save gagal! Buffer tetap disimpan.`);
+                            return;
+                        }
+
+                        console.log(`[Background] Menutup Tab ${tabId}, buat Tab Fresh...`);
+                        chrome.tabs.remove(tabId).catch(() => {});
+                        delete projectState.tabs[tabId];
+                        saveStateToDisk();
+
+                        chrome.tabs.create({ url: projectState.gptUrl || "https://chatgpt.com/", active: false }, (newTab) => {
+                            projectState.tabs[newTab.id] = { phase: "IDLE", wordCount: 0, storyNumber: 0, currentIdea: "", storyBuffer: "" };
+                            saveStateToDisk();
+                        });
+                        return;
+                    }
+
+                    // GENERATING → tentukan prompt berikutnya
+                    let nextPhase = "";
+                    let nextPrompt = "";
+
                     if (tabState.wordCount < (projectState.targetWords - 1000)) {
                         nextPhase = "GENERATING";
                         nextPrompt = `Lanjutkan narasi monolog personal ini berdasarkan bagian akhir cerita sebelumnya:\n\n"...${message.lastParagraph}"\n\nBawa narasi bergerak maju. PENTING: JANGAN memberikan kesimpulan atau penutup. DILARANG KERAS menggunakan percakapan atau dialog.`;
@@ -297,13 +313,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                         nextPhase = "FINISHING";
                         nextPrompt = `Lanjutkan narasi monolog personal ini berdasarkan bagian akhir cerita sebelumnya:\n\n"...${message.lastParagraph}"\n\nArahkan cerita menuju akhir yang memuaskan. Berikan kesimpulan dan penutup cerita yang emosional. DILARANG KERAS menggunakan percakapan atau dialog.`;
                     }
-                }
 
-                if (projectState.isActive && nextPrompt) {
-                    chrome.tabs.sendMessage(tabId, { action: "INJECT", text: nextPrompt, phase: nextPhase });
-                    tabState.phase = nextPhase;
+                    console.log(`[Background] Tab ${tabId} → ${nextPhase} (${tabState.wordCount}/${projectState.targetWords} kata)`);
+
+                    if (projectState.isActive && nextPrompt) {
+                        tabState.phase = nextPhase;
+                        saveStateToDisk();
+                        chrome.tabs.sendMessage(tabId, { action: "INJECT", text: nextPrompt, phase: nextPhase }, (resp) => {
+                            if (chrome.runtime.lastError) {
+                                console.error(`[Background] Gagal kirim INJECT ${nextPhase} ke tab ${tabId}:`, chrome.runtime.lastError.message);
+                            } else {
+                                console.log(`[Background] INJECT ${nextPhase} terkirim ke tab ${tabId}`);
+                            }
+                        });
+                    }
                 }
+            } catch (err) {
+                console.error(`[Background] Error di GPT_DONE handler:`, err);
             }
         })();
+
+        return true; // Jaga channel tetap terbuka untuk async
     }
 });
