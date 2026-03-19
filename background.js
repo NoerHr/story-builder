@@ -41,6 +41,7 @@ function focusNextTab() {
     }
     currentFocusTabId = focusQueue.shift();
     console.log(`[Queue] Focus ke Tab ${currentFocusTabId}. Sisa antrian: [${focusQueue}]`);
+    startFocusTimeout(); // Safety timeout
     // Pastikan window GPT ke depan (penting kalau split window)
     if (engineWindowId) {
         chrome.windows.update(engineWindowId, { focused: true }).catch(() => {});
@@ -69,8 +70,11 @@ function focusNextTab() {
     });
 }
 
+let focusTimeout = null;
+
 function onInjectSent(tabId) {
     if (tabId === currentFocusTabId) {
+        if (focusTimeout) clearTimeout(focusTimeout);
         // INJECT sudah benar-benar dikirim ke GPT → tunggu 1 detik → pindah
         setTimeout(() => {
             console.log(`[Queue] INJECT terkirim di Tab ${tabId}. Pindah ke tab berikutnya...`);
@@ -80,13 +84,28 @@ function onInjectSent(tabId) {
     }
 }
 
+// Safety: kalau INJECT_SENT tidak datang dalam 15 detik, paksa pindah
+function startFocusTimeout() {
+    if (focusTimeout) clearTimeout(focusTimeout);
+    focusTimeout = setTimeout(() => {
+        if (currentFocusTabId) {
+            console.warn(`[Queue] Timeout! Tab ${currentFocusTabId} tidak lapor INJECT_SENT. Paksa pindah...`);
+            currentFocusTabId = null;
+            focusNextTab();
+        }
+    }, 15000);
+}
+
 // Helper: buat tab di window yang sama dengan tab GPT lainnya
 function createTabInEngineWindow(url, active, callback) {
     const opts = { url: url, active: active };
     if (engineWindowId) opts.windowId = engineWindowId;
     chrome.tabs.create(opts, (newTab) => {
         // Simpan windowId dari tab pertama yang dibuat
-        if (!engineWindowId && newTab) engineWindowId = newTab.windowId;
+        if (!engineWindowId && newTab) {
+            engineWindowId = newTab.windowId;
+            saveStateToDisk();
+        }
         if (callback) callback(newTab);
     });
 }
@@ -103,7 +122,8 @@ function saveStateToDisk() {
         docsCreated: projectState.docsCreated,
         storiesInCurrentDoc: projectState.storiesInCurrentDoc,
         totalStoriesGlobal: projectState.totalStoriesGlobal,
-        tabs: projectState.tabs
+        tabs: projectState.tabs,
+        engineWindowId: engineWindowId
     };
     chrome.storage.local.set({ _engineState: saveData });
 }
@@ -114,14 +134,15 @@ chrome.storage.local.get(['_engineState'], (result) => {
         const s = result._engineState;
         projectState.isActive = s.isActive || false;
         projectState.gptUrl = s.gptUrl || "https://chatgpt.com/";
-        projectState.maxDocs = s.maxDocs || 3;
-        projectState.maxStoriesPerDoc = s.maxStoriesPerDoc || 9;
+        projectState.maxDocs = s.maxDocs || 9;
+        projectState.maxStoriesPerDoc = s.maxStoriesPerDoc || 3;
         projectState.targetWords = s.targetWords || 15000;
         projectState.currentDocId = s.currentDocId || null;
         projectState.docsCreated = s.docsCreated || 0;
         projectState.storiesInCurrentDoc = s.storiesInCurrentDoc || 0;
         projectState.totalStoriesGlobal = s.totalStoriesGlobal || 0;
         projectState.tabs = s.tabs || {};
+        engineWindowId = s.engineWindowId || null;
         if (projectState.isActive) {
             console.log("[Background] State dipulihkan dari storage! Engine masih aktif.", projectState);
         }
@@ -265,9 +286,10 @@ async function saveFullStoryToDoc(tabId) {
             const newDoc = await createNewDoc(`InkFlow AI - Dokumen ${projectState.docsCreated + 1}`);
             if (newDoc) {
                 projectState.currentDocId = newDoc.id;
+                saveStateToDisk(); // PENTING: simpan docId segera supaya tidak hilang saat SW restart
                 createTabInEngineWindow(newDoc.url, true, null);
             } else {
-                return "ERROR"; 
+                return "ERROR";
             }
         }
 
