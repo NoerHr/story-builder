@@ -504,14 +504,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                             return;
                         }
 
-                        console.log(`[Background] Menutup Tab ${tabId}, buat Tab Fresh...`);
-                        chrome.tabs.remove(tabId).catch(() => {});
-                        delete projectState.tabs[tabId];
-                        saveStateToDisk();
+                        console.log(`[Background] Menutup Tab ${tabId}, buat Tab Fresh di posisi yang sama...`);
+                        // Ambil posisi tab lama SEBELUM ditutup
+                        chrome.tabs.get(tabId, (oldTab) => {
+                            const tabIndex = (oldTab && !chrome.runtime.lastError) ? oldTab.index : undefined;
+                            const tabWindowId = (oldTab && !chrome.runtime.lastError) ? oldTab.windowId : engineWindowId;
 
-                        createTabInEngineWindow(projectState.gptUrl || "https://chatgpt.com/", false, (newTab) => {
-                            projectState.tabs[newTab.id] = { phase: "IDLE", wordCount: 0, storyNumber: 0, currentIdea: "", storyBuffer: "" };
+                            chrome.tabs.remove(tabId).catch(() => {});
+                            delete projectState.tabs[tabId];
                             saveStateToDisk();
+
+                            // Buat tab baru di posisi & window yang sama
+                            const opts = { url: projectState.gptUrl || "https://chatgpt.com/", active: false };
+                            if (tabWindowId) opts.windowId = tabWindowId;
+                            if (tabIndex !== undefined) opts.index = tabIndex;
+                            chrome.tabs.create(opts, (newTab) => {
+                                projectState.tabs[newTab.id] = { phase: "IDLE", wordCount: 0, storyNumber: 0, currentIdea: "", storyBuffer: "" };
+                                saveStateToDisk();
+                            });
                         });
                         return;
                     }
