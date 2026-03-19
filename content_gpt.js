@@ -34,6 +34,9 @@ function initWhenReady(retryCount = 0) {
                     console.log("[Content Script] Perintah INJECT diterima langsung! Memulai fase:", response.phase);
                     engineActive = true;
                     setTimeout(() => injectTextAndSend(response.text), 1500);
+                } else if (response && response.status === "queued") {
+                    console.log("[Content Script] Tab masuk antrian focus. Menunggu giliran...");
+                    engineActive = true;
                 } else if (response && response.status === "standby") {
                     console.log("[Content Script] Engine belum aktif (standby). Retry dalam 3 detik...");
                     if (retryCount < 30) {

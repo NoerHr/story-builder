@@ -14,11 +14,14 @@ let projectState = {
     tabs: {} 
 };
 
-console.log("[Background] Pabrik Cerita Otonom (V8.0 - Focus Queue) Berjalan.");
+console.log("[Background] Pabrik Cerita Otonom (V9.0 - Window Lock) Berjalan.");
 
 // === FOCUS QUEUE: Antrian tab, tunggu INJECT terkirim baru pindah ===
 let focusQueue = [];
 let currentFocusTabId = null;
+let engineWindowId = null; // Semua tab GPT & Doc dibuka di window ini
+
+const BRAINSTORM_PROMPT = "Berikan 10 ide tema cerita monolog personal (sudut pandang 'Aku') yang sangat liar, emosional, unik, dan tidak klise. Format jawabanmu HANYA berupa teks list biasa, satu baris untuk satu ide. Jangan berikan nomor urut, kalimat pembuka, atau penutup. Berikan idenya saja.";
 
 function addToFocusQueue(tabId) {
     if (!focusQueue.includes(tabId)) {
@@ -38,7 +41,24 @@ function focusNextTab() {
     }
     currentFocusTabId = focusQueue.shift();
     console.log(`[Queue] Focus ke Tab ${currentFocusTabId}. Sisa antrian: [${focusQueue}]`);
-    chrome.tabs.update(currentFocusTabId, { active: true }).catch(() => {
+    chrome.tabs.update(currentFocusTabId, { active: true }).then(() => {
+        // Setelah tab aktif, cek apakah perlu kirim BRAINSTORM INJECT
+        let tabState = projectState.tabs[currentFocusTabId];
+        if (tabState && tabState.phase === "WAIT_FOCUS") {
+            tabState.phase = "BRAINSTORM";
+            saveStateToDisk();
+            // Tunggu 1.5 detik supaya ChatGPT UI render dulu
+            setTimeout(() => {
+                chrome.tabs.sendMessage(currentFocusTabId, { action: "INJECT", text: BRAINSTORM_PROMPT, phase: "BRAINSTORM" }, (resp) => {
+                    if (chrome.runtime.lastError) {
+                        console.error(`[Queue] Gagal kirim BRAINSTORM ke tab ${currentFocusTabId}:`, chrome.runtime.lastError.message);
+                    } else {
+                        console.log(`[Queue] BRAINSTORM INJECT terkirim ke tab ${currentFocusTabId}`);
+                    }
+                });
+            }, 1500);
+        }
+    }).catch(() => {
         // Tab mungkin sudah ditutup, skip
         currentFocusTabId = null;
         focusNextTab();
@@ -54,6 +74,17 @@ function onInjectSent(tabId) {
             focusNextTab();
         }, 1000);
     }
+}
+
+// Helper: buat tab di window yang sama dengan tab GPT lainnya
+function createTabInEngineWindow(url, active, callback) {
+    const opts = { url: url, active: active };
+    if (engineWindowId) opts.windowId = engineWindowId;
+    chrome.tabs.create(opts, (newTab) => {
+        // Simpan windowId dari tab pertama yang dibuat
+        if (!engineWindowId && newTab) engineWindowId = newTab.windowId;
+        if (callback) callback(newTab);
+    });
 }
 
 // === PERSISTENT STATE: Simpan & pulihkan dari chrome.storage.local ===
@@ -230,7 +261,7 @@ async function saveFullStoryToDoc(tabId) {
             const newDoc = await createNewDoc(`InkFlow AI - Dokumen ${projectState.docsCreated + 1}`);
             if (newDoc) {
                 projectState.currentDocId = newDoc.id;
-                chrome.tabs.create({ url: newDoc.url, active: true });
+                createTabInEngineWindow(newDoc.url, true, null);
             } else {
                 return "ERROR"; 
             }
@@ -309,6 +340,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             projectState.isWriting = false;
             focusQueue = [];
             currentFocusTabId = null;
+            engineWindowId = null;
 
             // Auto-Cleanup Zombie Tabs
             Object.keys(projectState.tabs).forEach(id => {
@@ -318,7 +350,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
             console.log("[Background] ENGINE START! Membuka 3 Tab Fresh...");
             for(let i = 0; i < 3; i++) {
-                chrome.tabs.create({ url: projectState.gptUrl || "https://chatgpt.com/", active: false }, (newTab) => {
+                createTabInEngineWindow(projectState.gptUrl || "https://chatgpt.com/", false, (newTab) => {
                     projectState.tabs[newTab.id] = { phase: "IDLE", wordCount: 0, storyNumber: 0, currentIdea: "", storyBuffer: "" };
                     saveStateToDisk();
                 });
@@ -353,12 +385,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
 
         if (projectState.tabs[tabId].phase === "IDLE") {
-            projectState.tabs[tabId].phase = "BRAINSTORM";
-            // Focus tab ini supaya ChatGPT UI bisa diinteraksi
+            // Tandai tab siap, tapi JANGAN kirim INJECT dulu
+            // INJECT dikirim oleh focusNextTab() setelah tab benar-benar di-focus
+            projectState.tabs[tabId].phase = "WAIT_FOCUS";
             addToFocusQueue(tabId);
-            const promptIde = "Berikan 10 ide tema cerita monolog personal (sudut pandang 'Aku') yang sangat liar, emosional, unik, dan tidak klise. Format jawabanmu HANYA berupa teks list biasa, satu baris untuk satu ide. Jangan berikan nomor urut, kalimat pembuka, atau penutup. Berikan idenya saja.";
-            // Kirim INJECT langsung via sendResponse agar tidak hilang
-            sendResponse({ status: "ok", action: "INJECT", text: promptIde, phase: "BRAINSTORM" });
+            sendResponse({ status: "queued" });
         } else {
             sendResponse({ status: "ok" });
         }
@@ -439,7 +470,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                         delete projectState.tabs[tabId];
                         saveStateToDisk();
 
-                        chrome.tabs.create({ url: projectState.gptUrl || "https://chatgpt.com/", active: false }, (newTab) => {
+                        createTabInEngineWindow(projectState.gptUrl || "https://chatgpt.com/", false, (newTab) => {
                             projectState.tabs[newTab.id] = { phase: "IDLE", wordCount: 0, storyNumber: 0, currentIdea: "", storyBuffer: "" };
                             saveStateToDisk();
                         });
