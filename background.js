@@ -47,12 +47,12 @@ function focusNextTab() {
 
 function onInjectSent(tabId) {
     if (tabId === currentFocusTabId) {
-        // INJECT sudah terkirim → tunggu 2 detik biar user lihat → pindah
+        // INJECT sudah benar-benar dikirim ke GPT → tunggu 1 detik → pindah
         setTimeout(() => {
             console.log(`[Queue] INJECT terkirim di Tab ${tabId}. Pindah ke tab berikutnya...`);
             currentFocusTabId = null;
             focusNextTab();
-        }, 2000);
+        }, 1000);
     }
 }
 
@@ -275,7 +275,12 @@ async function saveFullStoryToDoc(tabId) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    
+
+    // Content script lapor: prompt sudah diketik & Send diklik
+    if (message.type === "INJECT_SENT" && sender.tab) {
+        onInjectSent(sender.tab.id);
+    }
+
     if (message.type === "UPDATE_SETTINGS") {
         projectState.targetWords = message.wordLimit || 15000;
         projectState.maxStoriesPerDoc = message.tabLimit || 3;
@@ -394,7 +399,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                             console.error(`[Background] Gagal kirim INJECT ke tab ${tabId}:`, chrome.runtime.lastError.message);
                         } else {
                             console.log(`[Background] INJECT GENERATING terkirim ke tab ${tabId}`);
-                            onInjectSent(tabId);
                         }
                     });
                     return;
@@ -464,7 +468,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                                 console.error(`[Background] Gagal kirim INJECT ${nextPhase} ke tab ${tabId}:`, chrome.runtime.lastError.message);
                             } else {
                                 console.log(`[Background] INJECT ${nextPhase} terkirim ke tab ${tabId}`);
-                                onInjectSent(tabId);
                             }
                         });
                     }

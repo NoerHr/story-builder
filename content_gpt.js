@@ -249,9 +249,11 @@ function triggerSend(textarea) {
 
     console.log("[Send] Tombol Send ditemukan:", !!sendButton);
 
+    let sent = false;
     if (sendButton && !sendButton.disabled) {
         sendButton.click();
         console.log("[Send] Diklik!");
+        sent = true;
         mulaiMemonitor();
     } else {
         console.warn("[Send] Tombol disabled/tidak ada. Coba form submit...");
@@ -259,12 +261,22 @@ function triggerSend(textarea) {
         if (form) {
             form.requestSubmit();
             console.log("[Send] form.requestSubmit()!");
+            sent = true;
         } else if (sendButton) {
             sendButton.removeAttribute('disabled');
             sendButton.click();
             console.log("[Send] Klik paksa!");
+            sent = true;
         }
         mulaiMemonitor();
+    }
+
+    // Lapor ke background bahwa prompt sudah benar-benar dikirim
+    if (sent) {
+        try {
+            chrome.runtime.sendMessage({ type: "INJECT_SENT" });
+            console.log("[Send] INJECT_SENT dilaporkan ke background.");
+        } catch (e) {}
     }
 
     // Safety: retry send setelah 3 detik kalau GPT tidak merespon
