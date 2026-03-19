@@ -41,6 +41,10 @@ function focusNextTab() {
     }
     currentFocusTabId = focusQueue.shift();
     console.log(`[Queue] Focus ke Tab ${currentFocusTabId}. Sisa antrian: [${focusQueue}]`);
+    // Pastikan window GPT ke depan (penting kalau split window)
+    if (engineWindowId) {
+        chrome.windows.update(engineWindowId, { focused: true }).catch(() => {});
+    }
     chrome.tabs.update(currentFocusTabId, { active: true }).then(() => {
         // Setelah tab aktif, cek apakah perlu kirim BRAINSTORM INJECT
         let tabState = projectState.tabs[currentFocusTabId];
