@@ -47,18 +47,28 @@ function focusNextTab() {
         chrome.windows.update(engineWindowId, { focused: true }).catch(() => {});
     }
     chrome.tabs.update(currentFocusTabId, { active: true }).then(() => {
-        // Setelah tab aktif, cek apakah perlu kirim BRAINSTORM INJECT
         let tabState = projectState.tabs[currentFocusTabId];
-        if (tabState && tabState.phase === "WAIT_FOCUS") {
+        if (!tabState) return;
+
+        // Tentukan INJECT yang perlu dikirim
+        let injectText = null;
+        if (tabState.phase === "WAIT_FOCUS") {
             tabState.phase = "BRAINSTORM";
+            injectText = BRAINSTORM_PROMPT;
+        } else if (tabState.pendingInject) {
+            injectText = tabState.pendingInject;
+            tabState.pendingInject = null;
+        }
+
+        if (injectText) {
             saveStateToDisk();
             // Tunggu 1.5 detik supaya ChatGPT UI render dulu
             setTimeout(() => {
-                chrome.tabs.sendMessage(currentFocusTabId, { action: "INJECT", text: BRAINSTORM_PROMPT, phase: "BRAINSTORM" }, (resp) => {
+                chrome.tabs.sendMessage(currentFocusTabId, { action: "INJECT", text: injectText, phase: tabState.phase }, (resp) => {
                     if (chrome.runtime.lastError) {
-                        console.error(`[Queue] Gagal kirim BRAINSTORM ke tab ${currentFocusTabId}:`, chrome.runtime.lastError.message);
+                        console.error(`[Queue] Gagal kirim INJECT ke tab ${currentFocusTabId}:`, chrome.runtime.lastError.message);
                     } else {
-                        console.log(`[Queue] BRAINSTORM INJECT terkirim ke tab ${currentFocusTabId}`);
+                        console.log(`[Queue] INJECT ${tabState.phase} terkirim ke tab ${currentFocusTabId}`);
                     }
                 });
             }, 1500);
@@ -68,6 +78,30 @@ function focusNextTab() {
         currentFocusTabId = null;
         focusNextTab();
     });
+}
+
+// Kirim INJECT: langsung kalau tab sudah di-focus, atau simpan & antri kalau belum
+function sendInjectToTab(tabId, text, phase) {
+    let tabState = projectState.tabs[tabId];
+    if (!tabState) return;
+
+    tabState.phase = phase;
+
+    if (tabId === currentFocusTabId) {
+        // Tab sudah di-focus → kirim langsung
+        chrome.tabs.sendMessage(tabId, { action: "INJECT", text: text, phase: phase }, (resp) => {
+            if (chrome.runtime.lastError) {
+                console.error(`[Background] Gagal kirim INJECT ke tab ${tabId}:`, chrome.runtime.lastError.message);
+            } else {
+                console.log(`[Background] INJECT ${phase} langsung ke tab ${tabId}`);
+            }
+        });
+    } else {
+        // Tab belum di-focus → simpan & masuk antrian
+        tabState.pendingInject = text;
+        addToFocusQueue(tabId);
+    }
+    saveStateToDisk();
 }
 
 let focusTimeout = null;
@@ -445,32 +479,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
 
         console.log(`[Background] GPT_DONE diterima dari tab ${tabId} | Phase: ${tabState.phase} | Words: ${message.wordCount}`);
-        sendResponse({ status: "received" }); // Tutup channel langsung, async lanjut sendiri
-
-        // Masukkan ke antrian focus
-        addToFocusQueue(tabId);
+        sendResponse({ status: "received" });
 
         (async () => {
             try {
                 if (tabState.phase === "BRAINSTORM") {
                     const ideArray = message.fullText.split('\n').filter(line => line.trim().length > 15);
                     tabState.currentIdea = ideArray.length > 0 ? ideArray[Math.floor(Math.random() * ideArray.length)].trim() : "Sebuah kebohongan masa kecil yang mengubah hidupku.";
-
-                    tabState.phase = "GENERATING";
                     tabState.wordCount = 0;
                     tabState.storyBuffer = "";
-                    saveStateToDisk();
 
                     console.log(`[Background] Tab ${tabId} mulai menulis ide: ${tabState.currentIdea}`);
 
                     const promptMulai = `Bagus. Abaikan ide lainnya. Sekarang bertindaklah sebagai seorang penulis memoar profesional. Ciptakan cerita SANGAT UNIK dari ide ini: "${tabState.currentIdea}". \n\nKembangkan jadi kejadian mengejutkan. Tulis monolog sudut pandang ('Aku'). Mulai langsung dari insiden utama. \nPENTING: Ini monolog batin murni. DILARANG KERAS menggunakan percakapan, dialog, atau tanda kutip sama sekali.`;
-                    chrome.tabs.sendMessage(tabId, { action: "INJECT", text: promptMulai, phase: "GENERATING" }, (resp) => {
-                        if (chrome.runtime.lastError) {
-                            console.error(`[Background] Gagal kirim INJECT ke tab ${tabId}:`, chrome.runtime.lastError.message);
-                        } else {
-                            console.log(`[Background] INJECT GENERATING terkirim ke tab ${tabId}`);
-                        }
-                    });
+                    sendInjectToTab(tabId, promptMulai, "GENERATING");
                     return;
                 }
 
@@ -480,9 +502,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                     console.log(`[Background] Tab ${tabId} buffer: ${tabState.wordCount} / ${projectState.targetWords} kata`);
                     saveStateToDisk();
 
-                    // Bersihkan lastParagraph dari UI text ChatGPT
                     let cleanParagraph = (message.lastParagraph || "").replace(/Gen Story bilang:/g, '').replace(/Gen Story said:/g, '').replace(/ChatGPT said:/g, '').replace(/ChatGPT bilang:/g, '').replace(/\.\s*\./g, '.').trim();
-                    // Potong di batas kata utuh (buang kata terpotong di awal)
                     cleanParagraph = cleanParagraph.replace(/^\S*\s+/, '');
 
                     if (tabState.phase === "FINISHING") {
@@ -505,16 +525,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                         }
 
                         console.log(`[Background] Menutup Tab ${tabId}, buat Tab Fresh di posisi yang sama...`);
-                        // Ambil posisi tab lama SEBELUM ditutup
                         chrome.tabs.get(tabId, (oldTab) => {
                             const tabIndex = (oldTab && !chrome.runtime.lastError) ? oldTab.index : undefined;
                             const tabWindowId = (oldTab && !chrome.runtime.lastError) ? oldTab.windowId : engineWindowId;
 
                             chrome.tabs.remove(tabId).catch(() => {});
                             delete projectState.tabs[tabId];
+                            // Lepas focus dari tab yang ditutup
+                            if (currentFocusTabId === tabId) currentFocusTabId = null;
                             saveStateToDisk();
 
-                            // Buat tab baru di posisi & window yang sama
                             const opts = { url: projectState.gptUrl || "https://chatgpt.com/", active: false };
                             if (tabWindowId) opts.windowId = tabWindowId;
                             if (tabIndex !== undefined) opts.index = tabIndex;
@@ -541,15 +561,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                     console.log(`[Background] Tab ${tabId} → ${nextPhase} (${tabState.wordCount}/${projectState.targetWords} kata)`);
 
                     if (projectState.isActive && nextPrompt) {
-                        tabState.phase = nextPhase;
-                        saveStateToDisk();
-                        chrome.tabs.sendMessage(tabId, { action: "INJECT", text: nextPrompt, phase: nextPhase }, (resp) => {
-                            if (chrome.runtime.lastError) {
-                                console.error(`[Background] Gagal kirim INJECT ${nextPhase} ke tab ${tabId}:`, chrome.runtime.lastError.message);
-                            } else {
-                                console.log(`[Background] INJECT ${nextPhase} terkirim ke tab ${tabId}`);
-                            }
-                        });
+                        sendInjectToTab(tabId, nextPrompt, nextPhase);
                     }
                 }
             } catch (err) {
