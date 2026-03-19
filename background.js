@@ -349,6 +349,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         if (projectState.tabs[tabId].phase === "IDLE") {
             projectState.tabs[tabId].phase = "BRAINSTORM";
+            // Focus tab ini supaya ChatGPT UI bisa diinteraksi
+            addToFocusQueue(tabId);
             const promptIde = "Berikan 10 ide tema cerita monolog personal (sudut pandang 'Aku') yang sangat liar, emosional, unik, dan tidak klise. Format jawabanmu HANYA berupa teks list biasa, satu baris untuk satu ide. Jangan berikan nomor urut, kalimat pembuka, atau penutup. Berikan idenya saja.";
             // Kirim INJECT langsung via sendResponse agar tidak hilang
             sendResponse({ status: "ok", action: "INJECT", text: promptIde, phase: "BRAINSTORM" });
@@ -406,6 +408,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
                     // Bersihkan lastParagraph dari UI text ChatGPT
                     let cleanParagraph = (message.lastParagraph || "").replace(/Gen Story bilang:/g, '').replace(/Gen Story said:/g, '').replace(/ChatGPT said:/g, '').replace(/ChatGPT bilang:/g, '').replace(/\.\s*\./g, '.').trim();
+                    // Potong di batas kata utuh (buang kata terpotong di awal)
+                    cleanParagraph = cleanParagraph.replace(/^\S*\s+/, '');
 
                     if (tabState.phase === "FINISHING") {
                         console.log(`[Background] Tab ${tabId} FINISHING! Menyimpan ke Doc...`);

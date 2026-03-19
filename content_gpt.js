@@ -370,7 +370,7 @@ function mulaiMemonitor() {
                         clearInterval(monitorInterval);
                         const fullText = lastCapturedText;
                         const wordCount = fullText.trim().split(/\s+/).filter(w => w.length > 0).length;
-                        let lastParagraph = fullText.substring(fullText.length - 300).trim().replace(/\n/g, ' ');
+                        let lastParagraph = fullText.substring(fullText.length - 300).trim().replace(/\n/g, ' ').replace(/^\S*\s+/, '');
                         console.log(`[Monitor] FORCE SELESAI! ${wordCount} kata (${fullText.length} chars).`);
                         sendGptDone(fullText, wordCount, lastParagraph);
                         wasTyping = false;
@@ -421,7 +421,7 @@ function mulaiMemonitor() {
 
             const fullText = lastCapturedText;
             const wordCount = fullText.trim().split(/\s+/).filter(w => w.length > 0).length;
-            let lastParagraph = fullText.substring(fullText.length - 300).trim().replace(/\n/g, ' ');
+            let lastParagraph = fullText.substring(fullText.length - 300).trim().replace(/\n/g, ' ').replace(/^\S*\s+/, '');
 
             console.log(`[Monitor] AI Selesai! ${wordCount} kata (${fullText.length} chars).`);
             console.log(`[Monitor] Preview: "${fullText.substring(0, 150)}..."`);
@@ -449,7 +449,7 @@ function mulaiMemonitor() {
 
                 const fullText = lastCapturedText;
                 const wordCount = fullText.trim().split(/\s+/).filter(w => w.length > 0).length;
-                let lastParagraph = fullText.substring(fullText.length - 300).trim().replace(/\n/g, ' ');
+                let lastParagraph = fullText.substring(fullText.length - 300).trim().replace(/\n/g, ' ').replace(/^\S*\s+/, '');
 
                 console.log(`[Monitor] AI Selesai! ${wordCount} kata (${fullText.length} chars).`);
                 sendGptDone(fullText, wordCount, lastParagraph);
