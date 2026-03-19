@@ -333,6 +333,11 @@ async function saveFullStoryToDoc(tabId) {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
+    // Selalu update engineWindowId dari tab GPT yang kirim pesan
+    if (sender.tab && projectState.tabs[sender.tab.id]) {
+        engineWindowId = sender.tab.windowId;
+    }
+
     // Content script lapor: prompt sudah diketik & Send diklik
     if (message.type === "INJECT_SENT" && sender.tab) {
         onInjectSent(sender.tab.id);
@@ -355,7 +360,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === "START_ENGINE") {
         // Login Google DULU sebelum mulai engine
         console.log("[Background] Mengecek login Google...");
-        getAuthToken().then((token) => {
+        getAuthToken().then(async (token) => {
             console.log("[Background] Login Google OK! Token diterima.");
 
             projectState.isActive = true;
@@ -366,7 +371,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             projectState.isWriting = false;
             focusQueue = [];
             currentFocusTabId = null;
-            engineWindowId = null;
+
+            // Ambil windowId dari window aktif saat ini (tempat user klik Start)
+            try {
+                const currentWindow = await chrome.windows.getCurrent();
+                engineWindowId = currentWindow.id;
+                console.log(`[Background] Engine window: ${engineWindowId}`);
+            } catch (e) {
+                engineWindowId = null;
+            }
 
             // Auto-Cleanup Zombie Tabs
             Object.keys(projectState.tabs).forEach(id => {
