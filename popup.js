@@ -8,41 +8,46 @@ document.addEventListener('DOMContentLoaded', () => {
     
     const inputWordLimit = document.getElementById('input-word-limit');
     const inputTabLimit = document.getElementById('input-tab-limit');
+    const inputDocLimit = document.getElementById('input-doc-limit');
     const inputGptUrl = document.getElementById('input-gpt-url');
     const inputDocId = document.getElementById('input-doc-id');
     const saveSettingsBtn = document.getElementById('save-settings-btn');
-    
+
     const statWordLimit = document.getElementById('stat-word-limit');
     const statTabLimit = document.getElementById('stat-tab-limit');
+    const statDocLimit = document.getElementById('stat-doc-limit');
 
     let isEngineRunning = false; // State ON/OFF
 
-    const updateFooterUI = (wordLimit, tabLimit) => {
+    const updateFooterUI = (wordLimit, tabLimit, docLimit) => {
         let formattedWords = wordLimit >= 1000 ? (wordLimit / 1000) + 'K' : wordLimit;
         statWordLimit.innerText = `${formattedWords} Kata`;
-        statTabLimit.innerText = `${tabLimit} Tabs`;
+        statTabLimit.innerText = `${tabLimit}/Doc`;
+        statDocLimit.innerText = docLimit;
     };
 
     const loadSettings = () => {
         if (typeof chrome !== 'undefined' && chrome.storage) {
-            chrome.storage.local.get(['wordLimit', 'tabLimit', 'gptUrl', 'docId', 'isEngineRunning'], (result) => {
+            chrome.storage.local.get(['wordLimit', 'tabLimit', 'docLimit', 'gptUrl', 'docId', 'isEngineRunning'], (result) => {
                 if (result.wordLimit) inputWordLimit.value = result.wordLimit;
                 if (result.tabLimit) inputTabLimit.value = result.tabLimit;
+                if (result.docLimit) inputDocLimit.value = result.docLimit;
                 if (result.gptUrl) inputGptUrl.value = result.gptUrl;
                 if (result.docId) inputDocId.value = result.docId;
-                
+
                 // Kembalikan state tombol jika sebelumnya sedang jalan
                 if (result.isEngineRunning) {
-                    setEngineState(true, false); 
+                    setEngineState(true, false);
                 }
-                updateFooterUI(inputWordLimit.value, inputTabLimit.value);
+                updateFooterUI(inputWordLimit.value, inputTabLimit.value, inputDocLimit.value);
             });
         }
     };
 
     saveSettingsBtn.onclick = () => {
         const wl = parseInt(inputWordLimit.value, 10) || 15000;
-        const tl = parseInt(inputTabLimit.value, 10) || 9;
+        const tl = parseInt(inputTabLimit.value, 10) || 3;
+        const dl = parseInt(inputDocLimit.value, 10) || 9;
         const url = inputGptUrl.value.trim() || "https://chatgpt.com/";
         const docId = inputDocId.value.trim();
 
@@ -54,9 +59,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }, 2000);
 
         if (typeof chrome !== 'undefined' && chrome.storage) {
-            chrome.storage.local.set({ wordLimit: wl, tabLimit: tl, gptUrl: url, docId: docId }, () => {
-                updateFooterUI(wl, tl);
-                chrome.runtime.sendMessage({ type: "UPDATE_SETTINGS", wordLimit: wl, tabLimit: tl, gptUrl: url, docId: docId });
+            chrome.storage.local.set({ wordLimit: wl, tabLimit: tl, docLimit: dl, gptUrl: url, docId: docId }, () => {
+                updateFooterUI(wl, tl, dl);
+                chrome.runtime.sendMessage({ type: "UPDATE_SETTINGS", wordLimit: wl, tabLimit: tl, docLimit: dl, gptUrl: url, docId: docId });
             });
         }
     };

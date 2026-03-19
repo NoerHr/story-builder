@@ -1,8 +1,8 @@
 let projectState = {
     isActive: false,
     gptUrl: "https://chatgpt.com/",
-    maxDocs: 3,         
-    maxStoriesPerDoc: 9,
+    maxDocs: 9,
+    maxStoriesPerDoc: 3,
     targetWords: 15000, 
     
     currentDocId: null,
@@ -102,17 +102,92 @@ async function getAuthToken() {
     });
 }
 
+const FOLDER_NAME = "InkFlow AI";
+let cachedFolderId = null;
+
+async function getOrCreateFolder() {
+    if (cachedFolderId) return cachedFolderId;
+
+    try {
+        const token = await getAuthToken();
+
+        // Cari folder yang sudah ada
+        const query = `name='${FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+        const searchRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name)`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const searchData = await searchRes.json();
+
+        if (searchData.files && searchData.files.length > 0) {
+            cachedFolderId = searchData.files[0].id;
+            console.log(`[Background] Folder "${FOLDER_NAME}" ditemukan: ${cachedFolderId}`);
+            return cachedFolderId;
+        }
+
+        // Belum ada → buat baru
+        const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: FOLDER_NAME, mimeType: 'application/vnd.google-apps.folder' })
+        });
+        const createData = await createRes.json();
+        if (!createRes.ok) throw new Error("Gagal buat folder");
+
+        cachedFolderId = createData.id;
+        console.log(`[Background] Folder "${FOLDER_NAME}" dibuat baru: ${cachedFolderId}`);
+        return cachedFolderId;
+    } catch (error) {
+        console.error("[Background] Gagal get/create folder:", error);
+        return null;
+    }
+}
+
+async function getUniqueDocTitle(baseTitle, folderId) {
+    try {
+        const token = await getAuthToken();
+        // Cari semua doc di folder yang namanya mirip baseTitle
+        let query = `name contains '${baseTitle}' and mimeType='application/vnd.google-apps.document' and trashed=false`;
+        if (folderId) query += ` and '${folderId}' in parents`;
+
+        const res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(name)`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const data = await res.json();
+        const existingNames = (data.files || []).map(f => f.name);
+
+        // Kalau baseTitle belum ada, pakai langsung
+        if (!existingNames.includes(baseTitle)) return baseTitle;
+
+        // Cari nomor tertinggi lalu +1
+        let maxNum = 1;
+        for (const name of existingNames) {
+            const match = name.match(/\((\d+)\)$/);
+            if (match) maxNum = Math.max(maxNum, parseInt(match[1]));
+        }
+        return `${baseTitle} (${maxNum + 1})`;
+    } catch (error) {
+        // Fallback: tambah timestamp
+        return `${baseTitle} (${Date.now()})`;
+    }
+}
+
 async function createNewDoc(title) {
     try {
         const token = await getAuthToken();
+        const folderId = await getOrCreateFolder();
+        const uniqueTitle = await getUniqueDocTitle(title, folderId);
+
+        const body = { name: uniqueTitle, mimeType: 'application/vnd.google-apps.document' };
+        if (folderId) body.parents = [folderId];
+
         const response = await fetch('https://www.googleapis.com/drive/v3/files', {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: title, mimeType: 'application/vnd.google-apps.document' })
+            body: JSON.stringify(body)
         });
         const data = await response.json();
         if (!response.ok) throw new Error("Gagal API");
-        console.log(`[Background] 📄 Doc Baru Berhasil Dibuat: ${title}`);
+        console.log(`[Background] Doc Baru Berhasil Dibuat: ${uniqueTitle} (folder: ${folderId || 'root'})`);
         return { id: data.id, url: `https://docs.google.com/document/d/${data.id}/edit` };
     } catch (error) {
         console.error("[Background] Gagal buat Doc:", error);
@@ -203,7 +278,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     
     if (message.type === "UPDATE_SETTINGS") {
         projectState.targetWords = message.wordLimit || 15000;
-        projectState.maxStoriesPerDoc = message.tabLimit || 9;
+        projectState.maxStoriesPerDoc = message.tabLimit || 3;
+        projectState.maxDocs = message.docLimit || 9;
         if (message.gptUrl) projectState.gptUrl = message.gptUrl;
         
         if (message.docId) {
